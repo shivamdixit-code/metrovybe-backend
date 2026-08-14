@@ -21,6 +21,98 @@ function adminOnly(req, res, next) {
   next();
 }
 
+
+/*
+  GET /api/admin/dashboard
+
+  Real-time admin dashboard statistics from MongoDB.
+*/
+router.get(
+  "/dashboard",
+  auth,
+  adminOnly,
+  async (req, res) => {
+    try {
+      const Listing = require("../models/Listing");
+
+      const [
+        totalUsers,
+        customers,
+        businesses,
+        pendingBusinesses,
+        verifiedBusinesses,
+        totalListings,
+        publishedListings,
+        pendingListings,
+        rejectedListings,
+      ] = await Promise.all([
+        User.countDocuments(),
+
+        User.countDocuments({
+          role: "customer",
+        }),
+
+        Business.countDocuments(),
+
+        Business.countDocuments({
+          verificationStatus: {
+            $in: [
+              "pending",
+              "under_review",
+              "more_information_required",
+            ],
+          },
+        }),
+
+        Business.countDocuments({
+          verificationStatus: "verified",
+        }),
+
+        Listing.countDocuments(),
+
+        Listing.countDocuments({
+          status: "published",
+        }),
+
+        Listing.countDocuments({
+          status: "pending",
+        }),
+
+        Listing.countDocuments({
+          status: "rejected",
+        }),
+      ]);
+
+      res.json({
+        users: {
+          total: totalUsers,
+          customers,
+          businesses,
+        },
+
+        businesses: {
+          total: businesses,
+          pending: pendingBusinesses,
+          verified: verifiedBusinesses,
+        },
+
+        listings: {
+          total: totalListings,
+          published: publishedListings,
+          pending: pendingListings,
+          rejected: rejectedListings,
+        },
+      });
+    } catch (error) {
+      console.error("Admin dashboard error:", error);
+
+      res.status(500).json({
+        message: "Failed to load admin dashboard",
+      });
+    }
+  }
+);
+
 /*
   GET /api/admin/businesses/pending
 
@@ -281,3 +373,54 @@ router.post(
 );
 
 module.exports = router;
+
+/*
+  GET /api/admin/dashboard
+  Admin CRM dashboard summary.
+*/
+router.get(
+  "/dashboard",
+  auth,
+  adminOnly,
+  async (req, res) => {
+    try {
+      const [
+        totalUsers,
+        totalBusinesses,
+        pendingBusinesses,
+        verifiedBusinesses,
+        rejectedBusinesses,
+      ] = await Promise.all([
+        User.countDocuments(),
+        Business.countDocuments(),
+        Business.countDocuments({
+          verificationStatus: {
+            $in: ["pending", "under_review", "more_information_required"],
+          },
+        }),
+        Business.countDocuments({
+          verificationStatus: "verified",
+        }),
+        Business.countDocuments({
+          verificationStatus: "rejected",
+        }),
+      ]);
+
+      res.json({
+        stats: {
+          totalUsers,
+          totalBusinesses,
+          pendingBusinesses,
+          verifiedBusinesses,
+          rejectedBusinesses,
+        },
+      });
+    } catch (error) {
+      console.error("Admin dashboard error:", error);
+
+      res.status(500).json({
+        message: "Failed to load admin dashboard",
+      });
+    }
+  }
+);
