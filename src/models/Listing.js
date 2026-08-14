@@ -14,6 +14,12 @@ const listingSchema = new mongoose.Schema(
       trim: true,
     },
 
+    business: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "Business",
+      default: null,
+    },
+
     description: {
       type: String,
       default: "",
