@@ -155,11 +155,17 @@ router.post("/register", async (req, res) => {
 */
 router.post("/login", async (req, res) => {
   try {
-    const { email, password } = req.body;
+    const { email, password, selectedRole } = req.body;
 
     if (!email || !password) {
       return res.status(400).json({
         message: "Email and password are required",
+      });
+    }
+
+    if (!selectedRole || !["customer", "business"].includes(selectedRole)) {
+      return res.status(400).json({
+        message: "Please select Customer or Business",
       });
     }
 
@@ -187,6 +193,15 @@ router.post("/login", async (req, res) => {
     if (user.status === "suspended") {
       return res.status(403).json({
         message: "Your account has been suspended",
+      });
+    }
+
+    if (user.role !== selectedRole) {
+      return res.status(403).json({
+        message:
+          selectedRole === "business"
+            ? "This account is not a Business account. Please select Customer."
+            : "This account is not a Customer account. Please select Business.",
       });
     }
 
