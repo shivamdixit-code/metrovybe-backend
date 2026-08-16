@@ -4,6 +4,8 @@ const jwt = require("jsonwebtoken");
 
 const User = require("../models/User");
 const Business = require("../models/Business");
+const SignupPhoneOtp = require("../models/SignupPhoneOtp");
+const axios = require("axios");
 
 const router = express.Router();
 
@@ -97,18 +99,22 @@ router.post("/register", async (req, res) => {
       });
     }
 
+    // Prevent registration with an email that already exists.
+    const existingEmailUser = await User.findOne({
+      email: normalizedEmail,
+    }).select("_id");
+
+    if (existingEmailUser) {
+      return res.status(409).json({
+        message: "An account with this email address already exists. Please log in instead.",
+      });
+    }
+
     if (role === "customer") {
       const cleanPhone = String(phone || "").replace(/[\s-]/g, "");
 
       const validPhone =
-        /^\+91[6-9]\d{9}$/.test(cleanPhone) ||
-        /^\+44 7\d{9}$/.test(cleanPhone) ||
-        /^\+1[2-9]\d{9}$/.test(cleanPhone) ||
-        /^\+61 4\d{8}$/.test(cleanPhone) ||
-        /^\+64 2\d{8}$/.test(cleanPhone) ||
-        /^\+65[89]\d{7}$/.test(cleanPhone) ||
-        /^\+60 1\d{8}$/.test(cleanPhone) ||
-        /^\+9715\d{8}$/.test(cleanPhone);
+        /^\+\d{8,15}$/.test(cleanPhone);
 
       if (!validPhone) {
         return res.status(400).json({
@@ -378,35 +384,80 @@ function hashPhoneOtp(otp) {
 
 
 // ==================== SIGNUP PHONE OTP ====================
-// Temporary in-memory OTP store for new customer signup.
-// The User document is created only after signup is completed.
+// Signup OTP is stored in MongoDB and delivered through Evolution API.
 
-const signupPhoneOtps = new Map();
+async function sendWhatsAppOtp(phone, otp) {
+  const apiUrl = String(process.env.EVOLUTION_API_URL || "").replace(/\/$/, "");
+  const apiKey = process.env.EVOLUTION_API_KEY;
+  const instance = process.env.EVOLUTION_INSTANCE;
+
+  if (!apiUrl || !apiKey || !instance) {
+    throw new Error("Evolution API environment variables are not configured.");
+  }
+
+  const number = String(phone).replace(/\D/g, "");
+
+  const message =
+    `MetroVybe verification code: ${otp}\n\n` +
+    `This OTP is valid for 5 minutes.\n` +
+    `Do not share this code with anyone.`;
+
+  const response = await axios.post(
+    `${apiUrl}/message/sendText/${encodeURIComponent(instance)}`,
+    {
+      number,
+      text: message,
+    },
+    {
+      headers: {
+        apikey: apiKey,
+        "Content-Type": "application/json",
+      },
+      timeout: 15000,
+    }
+  );
+
+  return response.data;
+}
 
 router.post("/send-signup-phone-otp", async (req, res) => {
   try {
     const phone = String(req.body.phone || "").trim();
 
-    if (!phone) {
+    const cleanPhone = String(phone)
+      .trim()
+      .replace(/[\s()-]/g, "");
+
+    const validPhone =
+      /^\+[1-9]\d{7,14}$/.test(cleanPhone);
+
+    if (!validPhone) {
       return res.status(400).json({
-        message: "Phone number is required.",
+        message: "Please enter a valid international mobile number.",
       });
     }
 
-    const existingUser = await User.findOne({ phone });
+    const existingUser = await User.findOne({
+      phone: cleanPhone,
+    });
 
     if (existingUser) {
       return res.status(409).json({
-        message: "An account already exists with this phone number. Please log in instead.",
+        message:
+          "An account already exists with this phone number. Please log in instead.",
       });
     }
 
-    const existing = signupPhoneOtps.get(phone);
-    const now = Date.now();
+    const now = new Date();
+
+    let record = await SignupPhoneOtp.findOne({
+      phone: cleanPhone,
+    });
 
     if (
-      existing &&
-      now - existing.lastSentAt < 60000
+      record &&
+      record.lastSentAt &&
+      now.getTime() - record.lastSentAt.getTime() < 60000
     ) {
       return res.status(429).json({
         message: "Please wait 60 seconds before requesting another OTP.",
@@ -415,22 +466,46 @@ router.post("/send-signup-phone-otp", async (req, res) => {
 
     const otp = createPhoneOtp();
 
-    signupPhoneOtps.set(phone, {
-      otpHash: hashPhoneOtp(otp),
-      expiresAt: now + 5 * 60 * 1000,
-      attempts: 0,
-      lastSentAt: now,
-    });
+    if (!record) {
+      record = new SignupPhoneOtp({
+        phone: cleanPhone,
+      });
+    }
+
+    record.otpHash = hashPhoneOtp(otp);
+    record.expiresAt = new Date(now.getTime() + 5 * 60 * 1000);
+    record.attempts = 0;
+    record.lastSentAt = now;
+    record.verified = false;
+
+    await record.save();
+
+    try {
+      await sendWhatsAppOtp(cleanPhone, otp);
+    } catch (whatsappError) {
+      console.error(
+        "EVOLUTION WHATSAPP OTP ERROR:",
+        whatsappError.response?.data || whatsappError.message
+      );
+
+      await SignupPhoneOtp.deleteOne({
+        phone: cleanPhone,
+      });
+
+      return res.status(502).json({
+        message: "Unable to send OTP through WhatsApp.",
+      });
+    }
 
     console.log("================================");
-    console.log("METROVYBE SIGNUP PHONE OTP");
-    console.log(`Phone: ${phone}`);
-    console.log(`OTP: ${otp}`);
+    console.log("METROVYBE SIGNUP WHATSAPP OTP SENT");
+    console.log(`Phone: ${cleanPhone}`);
+    console.log("OTP: [HIDDEN]");
     console.log("Expires: 5 minutes");
     console.log("================================");
 
     return res.json({
-      message: "Signup OTP generated successfully.",
+      message: "OTP sent successfully to WhatsApp.",
       verified: false,
     });
   } catch (error) {
@@ -453,7 +528,11 @@ router.post("/verify-signup-phone-otp", async (req, res) => {
       });
     }
 
-    const existingUser = await User.findOne({ phone });
+    const cleanPhone = phone.replace(/[\s-]/g, "");
+
+    const existingUser = await User.findOne({
+      phone: cleanPhone,
+    });
 
     if (existingUser) {
       return res.status(409).json({
@@ -461,7 +540,9 @@ router.post("/verify-signup-phone-otp", async (req, res) => {
       });
     }
 
-    const record = signupPhoneOtps.get(phone);
+    const record = await SignupPhoneOtp.findOne({
+      phone: cleanPhone,
+    });
 
     if (!record) {
       return res.status(400).json({
@@ -469,8 +550,10 @@ router.post("/verify-signup-phone-otp", async (req, res) => {
       });
     }
 
-    if (Date.now() > record.expiresAt) {
-      signupPhoneOtps.delete(phone);
+    if (record.expiresAt.getTime() < Date.now()) {
+      await SignupPhoneOtp.deleteOne({
+        phone: cleanPhone,
+      });
 
       return res.status(400).json({
         message: "OTP has expired. Please request a new OTP.",
@@ -478,23 +561,27 @@ router.post("/verify-signup-phone-otp", async (req, res) => {
     }
 
     if (record.attempts >= 5) {
-      signupPhoneOtps.delete(phone);
+      await SignupPhoneOtp.deleteOne({
+        phone: cleanPhone,
+      });
 
       return res.status(429).json({
-        message: "Too many incorrect attempts. Please request a new OTP.",
+        message:
+          "Too many incorrect attempts. Please request a new OTP.",
       });
     }
 
     if (hashPhoneOtp(otp) !== record.otpHash) {
       record.attempts += 1;
-      signupPhoneOtps.set(phone, record);
+      await record.save();
 
       return res.status(400).json({
         message: "Invalid OTP.",
       });
     }
 
-    signupPhoneOtps.delete(phone);
+    record.verified = true;
+    await record.save();
 
     return res.json({
       message: "Phone number verified successfully.",
