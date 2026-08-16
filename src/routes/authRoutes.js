@@ -432,7 +432,6 @@ router.post("/send-signup-phone-otp", async (req, res) => {
     return res.json({
       message: "Signup OTP generated successfully.",
       verified: false,
-      otp: otp,
     });
   } catch (error) {
     console.error("SEND SIGNUP PHONE OTP ERROR:", error);
