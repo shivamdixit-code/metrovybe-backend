@@ -22,6 +22,33 @@ const userSchema = new mongoose.Schema(
       trim: true,
     },
 
+    gender: {
+      type: String,
+      enum: ["male", "female", "non-binary", "prefer-not-to-say"],
+      default: undefined,
+    },
+
+    dateOfBirth: {
+      type: Date,
+      default: undefined,
+    },
+
+    location: {
+      latitude: {
+        type: Number,
+        default: undefined,
+      },
+      longitude: {
+        type: Number,
+        default: undefined,
+      },
+      label: {
+        type: String,
+        default: "",
+        trim: true,
+      },
+    },
+
     password: {
       type: String,
       required: true,
@@ -47,6 +74,26 @@ const userSchema = new mongoose.Schema(
     phoneVerified: {
       type: Boolean,
       default: false,
+    },
+
+    phoneOtpHash: {
+      type: String,
+      default: "",
+    },
+
+    phoneOtpExpiresAt: {
+      type: Date,
+      default: undefined,
+    },
+
+    phoneOtpAttempts: {
+      type: Number,
+      default: 0,
+    },
+
+    phoneOtpLastSentAt: {
+      type: Date,
+      default: undefined,
     },
   },
   {
