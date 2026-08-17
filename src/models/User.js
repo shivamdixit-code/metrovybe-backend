@@ -71,6 +71,21 @@ const userSchema = new mongoose.Schema(
       default: false,
     },
 
+    emailVerificationTokenHash: {
+      type: String,
+      default: "",
+    },
+
+    emailVerificationTokenExpiresAt: {
+      type: Date,
+      default: undefined,
+    },
+
+    emailVerificationLastSentAt: {
+      type: Date,
+      default: undefined,
+    },
+
     phoneVerified: {
       type: Boolean,
       default: false,

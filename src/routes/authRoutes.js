@@ -6,6 +6,7 @@ const User = require("../models/User");
 const Business = require("../models/Business");
 const SignupPhoneOtp = require("../models/SignupPhoneOtp");
 const axios = require("axios");
+const { Resend } = require("resend");
 
 const router = express.Router();
 
@@ -20,6 +21,90 @@ function createToken(user) {
       expiresIn: "7d",
     }
   );
+}
+
+function createEmailVerificationToken() {
+  return require("crypto").randomBytes(32).toString("hex");
+}
+
+function hashEmailVerificationToken(token) {
+  return require("crypto")
+    .createHash("sha256")
+    .update(token)
+    .digest("hex");
+}
+
+async function sendEmailVerification(user) {
+  const apiKey = process.env.RESEND_API_KEY;
+  const from = process.env.EMAIL_FROM || "onboarding@resend.dev";
+  const frontendUrl =
+    process.env.FRONTEND_URL || "https://metrovybe.vercel.app";
+
+  if (!apiKey) {
+    throw new Error("RESEND_API_KEY is not configured");
+  }
+
+  const resend = new Resend(apiKey);
+
+  const token = createEmailVerificationToken();
+  const tokenHash = hashEmailVerificationToken(token);
+
+  user.emailVerificationTokenHash = tokenHash;
+  user.emailVerificationTokenExpiresAt = new Date(
+    Date.now() + 30 * 60 * 1000
+  );
+  user.emailVerificationLastSentAt = new Date();
+  user.emailVerified = false;
+
+  await user.save();
+
+  const verificationUrl =
+    `${frontendUrl}/verify-email?token=${encodeURIComponent(token)}` +
+    `&email=${encodeURIComponent(user.email)}`;
+
+  const result = await resend.emails.send({
+    from,
+    to: [user.email],
+    subject: "Verify your MetroVybe email",
+    html: `
+      <div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto;padding:32px;color:#111;">
+        <h1 style="margin-bottom:8px;">Welcome to MetroVybe 👋</h1>
+
+        <p style="font-size:16px;line-height:1.6;">
+          Hi ${String(user.name || "there").replace(/[<>&"]/g, "")},
+        </p>
+
+        <p style="font-size:16px;line-height:1.6;">
+          Please verify your email address to activate your MetroVybe account.
+        </p>
+
+        <p style="margin:32px 0;">
+          <a
+            href="${verificationUrl}"
+            style="display:inline-block;background:#29AB87;color:#fff;text-decoration:none;padding:14px 24px;border-radius:8px;font-weight:700;"
+          >
+            Verify my email
+          </a>
+        </p>
+
+        <p style="font-size:14px;color:#666;line-height:1.5;">
+          This verification link expires in 30 minutes.
+        </p>
+
+        <p style="font-size:13px;color:#888;line-height:1.5;">
+          If you did not create a MetroVybe account, you can safely ignore this email.
+        </p>
+      </div>
+    `,
+  });
+
+  if (result?.error) {
+    throw new Error(
+      result.error.message || "Resend failed to send verification email"
+    );
+  }
+
+  return verificationUrl;
 }
 
 /*
@@ -213,6 +298,7 @@ router.post("/register", async (req, res) => {
       password: hashedPassword,
       role,
       status: role === "business" ? "pending" : "active",
+      emailVerified: false,
       ...(role === "customer"
         ? {
             gender,
@@ -243,14 +329,34 @@ router.post("/register", async (req, res) => {
       });
     }
 
-    const token = createToken(user);
+    try {
+      await sendEmailVerification(user);
+    } catch (emailError) {
+      console.error(
+        "EMAIL VERIFICATION SEND ERROR:",
+        emailError.response?.data || emailError.message
+      );
+
+      await User.deleteOne({ _id: user._id });
+
+      if (business) {
+        await Business.deleteOne({ _id: business._id });
+      }
+
+      return res.status(502).json({
+        message:
+          "Account could not be created because the verification email could not be sent.",
+        code: "EMAIL_SEND_FAILED",
+      });
+    }
 
     return res.status(201).json({
       message:
         role === "business"
-          ? "Business account created. Verification is required before listings can go live."
-          : "Customer account created successfully.",
-      token,
+          ? "Business account created. Please verify your email before logging in."
+          : "Account created. Please check your email to verify your account.",
+      emailVerificationRequired: true,
+      emailVerified: false,
       user: {
         id: user._id,
         name: user.name,
@@ -258,6 +364,7 @@ router.post("/register", async (req, res) => {
         phone: user.phone,
         role: user.role,
         status: user.status,
+        emailVerified: user.emailVerified,
         ...(user.role === "customer"
           ? {
               gender: user.gender,
@@ -277,6 +384,127 @@ router.post("/register", async (req, res) => {
     });
   }
 });
+
+/*
+  GET /api/auth/verify-email?token=...&email=...
+*/
+router.get("/verify-email", async (req, res) => {
+  try {
+    const token = String(req.query.token || "").trim();
+    const email = String(req.query.email || "").trim().toLowerCase();
+
+    if (!token || !email) {
+      return res.status(400).json({
+        message: "Verification link is incomplete.",
+        code: "INVALID_VERIFICATION_LINK",
+      });
+    }
+
+    const tokenHash = hashEmailVerificationToken(token);
+
+    const user = await User.findOne({
+      email,
+      emailVerificationTokenHash: tokenHash,
+    });
+
+    if (!user) {
+      return res.status(400).json({
+        message: "This verification link is invalid or has already been used.",
+        code: "INVALID_VERIFICATION_TOKEN",
+      });
+    }
+
+    if (
+      !user.emailVerificationTokenExpiresAt ||
+      user.emailVerificationTokenExpiresAt.getTime() < Date.now()
+    ) {
+      return res.status(400).json({
+        message: "This verification link has expired. Please request a new one.",
+        code: "VERIFICATION_TOKEN_EXPIRED",
+      });
+    }
+
+    user.emailVerified = true;
+    user.emailVerificationTokenHash = "";
+    user.emailVerificationTokenExpiresAt = undefined;
+
+    await user.save();
+
+    return res.json({
+      message: "Email verified successfully.",
+      emailVerified: true,
+      user: {
+        id: user._id,
+        name: user.name,
+        email: user.email,
+        phone: user.phone,
+        role: user.role,
+        status: user.status,
+        emailVerified: true,
+      },
+    });
+  } catch (error) {
+    console.error("VERIFY EMAIL ERROR:", error);
+
+    return res.status(500).json({
+      message: "Unable to verify email.",
+    });
+  }
+});
+
+/*
+  POST /api/auth/resend-verification
+*/
+router.post("/resend-verification", async (req, res) => {
+  try {
+    const email = String(req.body.email || "").trim().toLowerCase();
+
+    if (!email) {
+      return res.status(400).json({
+        message: "Email address is required.",
+      });
+    }
+
+    const user = await User.findOne({ email });
+
+    if (!user) {
+      return res.json({
+        message:
+          "If an account exists with this email, a verification email has been sent.",
+      });
+    }
+
+    if (user.emailVerified) {
+      return res.status(409).json({
+        message: "This email address is already verified.",
+        code: "EMAIL_ALREADY_VERIFIED",
+      });
+    }
+
+    if (
+      user.emailVerificationLastSentAt &&
+      Date.now() - user.emailVerificationLastSentAt.getTime() < 60000
+    ) {
+      return res.status(429).json({
+        message: "Please wait 60 seconds before requesting another verification email.",
+      });
+    }
+
+    await sendEmailVerification(user);
+
+    return res.json({
+      message: "Verification email sent successfully.",
+      emailVerificationRequired: true,
+    });
+  } catch (error) {
+    console.error("RESEND VERIFICATION ERROR:", error);
+
+    return res.status(500).json({
+      message: "Unable to send verification email.",
+    });
+  }
+});
+
 
 /*
   POST /api/auth/login
@@ -330,6 +558,14 @@ router.post("/login", async (req, res) => {
           selectedRole === "business"
             ? "This account is not a Business account. Please select Customer."
             : "This account is not a Customer account. Please select Business.",
+      });
+    }
+
+    if (!user.emailVerified) {
+      return res.status(403).json({
+        message: "Please verify your email before logging in.",
+        code: "EMAIL_NOT_VERIFIED",
+        emailVerified: false,
       });
     }
 
