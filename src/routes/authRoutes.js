@@ -208,17 +208,30 @@ router.post("/register", async (req, res) => {
       });
     }
 
+    const cleanPhone = String(phone || "").replace(/[\s()-]/g, "");
+
+    const validPhone =
+      /^\+[1-9]\d{7,14}$/.test(cleanPhone);
+
+    if (!validPhone) {
+      return res.status(400).json({
+        message: "Please enter a valid international mobile number.",
+      });
+    }
+
+    const verifiedSignupPhone = await SignupPhoneOtp.findOne({
+      phone: cleanPhone,
+      verified: true,
+    });
+
+    if (!verifiedSignupPhone) {
+      return res.status(403).json({
+        message: "Please verify your phone number before creating your account.",
+        code: "PHONE_VERIFICATION_REQUIRED",
+      });
+    }
+
     if (role === "customer") {
-      const cleanPhone = String(phone || "").replace(/[\s-]/g, "");
-
-      const validPhone =
-        /^\+\d{8,15}$/.test(cleanPhone);
-
-      if (!validPhone) {
-        return res.status(400).json({
-          message: "Please enter a valid international mobile number.",
-        });
-      }
 
       const allowedGenders = [
         "male",
@@ -307,11 +320,12 @@ router.post("/register", async (req, res) => {
     const user = await User.create({
       name,
       email: normalizedEmail,
-      phone: phone || "",
+      phone: cleanPhone,
       password: hashedPassword,
       role,
       status: role === "business" ? "pending" : "active",
       emailVerified: false,
+      phoneVerified: Boolean(verifiedSignupPhone),
       ...(role === "customer"
         ? {
             gender,
@@ -332,8 +346,8 @@ router.post("/register", async (req, res) => {
         owner: user._id,
         businessName,
         category,
-        phone: phone || "",
-        email,
+        phone: cleanPhone,
+        email: normalizedEmail,
         address,
         city,
         state: state || "",
@@ -341,6 +355,10 @@ router.post("/register", async (req, res) => {
         verificationStatus: "pending",
       });
     }
+
+    await SignupPhoneOtp.deleteOne({
+      _id: verifiedSignupPhone._id,
+    });
 
     try {
       await sendEmailVerification(user);
@@ -1243,12 +1261,6 @@ router.post("/verify-signup-phone-otp", async (req, res) => {
       phone: cleanPhone,
     });
 
-    if (existingUser) {
-      return res.status(409).json({
-        message: "An account already exists with this phone number.",
-      });
-    }
-
     const record = await SignupPhoneOtp.findOne({
       phone: cleanPhone,
     });
@@ -1291,6 +1303,15 @@ router.post("/verify-signup-phone-otp", async (req, res) => {
 
     record.verified = true;
     await record.save();
+
+    if (existingUser) {
+      existingUser.phoneVerified = true;
+      existingUser.phoneOtpHash = "";
+      existingUser.phoneOtpExpiresAt = undefined;
+      existingUser.phoneOtpAttempts = 0;
+      existingUser.phoneOtpLastSentAt = undefined;
+      await existingUser.save();
+    }
 
     return res.json({
       message: "Phone number verified successfully.",
