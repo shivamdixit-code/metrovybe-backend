@@ -643,6 +643,15 @@ router.post("/send-login-phone-otp", async (req, res) => {
       });
     }
 
+    console.log("WHATSAPP LOGIN USER CHECK:", {
+      id: String(user._id),
+      phone: user.phone,
+      phoneVerified: user.phoneVerified,
+      phoneVerifiedType: typeof user.phoneVerified,
+      role: user.role,
+      status: user.status,
+    });
+
     if (!user.phoneVerified) {
       return res.status(403).json({
         message: "Please verify your phone number before using WhatsApp login.",
