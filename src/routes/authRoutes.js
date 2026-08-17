@@ -652,6 +652,16 @@ router.post("/send-login-phone-otp", async (req, res) => {
       status: user.status,
     });
 
+    console.log("===== WHATSAPP LOGIN PHONE VERIFICATION DEBUG =====");
+    console.log({
+      phone: cleanPhone,
+      userId: String(user._id),
+      phoneVerified: user.phoneVerified,
+      phoneVerifiedType: typeof user.phoneVerified,
+      role: user.role,
+      status: user.status,
+    });
+
     if (!user.phoneVerified) {
       return res.status(403).json({
         message: "Please verify your phone number before using WhatsApp login.",
