@@ -39,6 +39,8 @@ async function sendEmailVerification(user) {
   const from = process.env.EMAIL_FROM || "onboarding@resend.dev";
   const frontendUrl =
     process.env.FRONTEND_URL || "https://metrovybe.vercel.app";
+  const backendUrl =
+    process.env.BACKEND_URL || "https://metrovybe-backend.onrender.com";
 
   if (!apiKey) {
     throw new Error("RESEND_API_KEY is not configured");
@@ -59,7 +61,7 @@ async function sendEmailVerification(user) {
   await user.save();
 
   const verificationUrl =
-    `${frontendUrl}/verify-email?token=${encodeURIComponent(token)}` +
+    `${backendUrl}/api/auth/verify-email?token=${encodeURIComponent(token)}` +
     `&email=${encodeURIComponent(user.email)}`;
 
   const result = await resend.emails.send({
@@ -430,19 +432,9 @@ router.get("/verify-email", async (req, res) => {
 
     await user.save();
 
-    return res.json({
-      message: "Email verified successfully.",
-      emailVerified: true,
-      user: {
-        id: user._id,
-        name: user.name,
-        email: user.email,
-        phone: user.phone,
-        role: user.role,
-        status: user.status,
-        emailVerified: true,
-      },
-    });
+    return res.redirect(
+      `${process.env.FRONTEND_URL || "https://metrovybe.vercel.app"}/profile?emailVerified=true`
+    );
   } catch (error) {
     console.error("VERIFY EMAIL ERROR:", error);
 
