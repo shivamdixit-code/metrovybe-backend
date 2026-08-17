@@ -113,6 +113,36 @@ router.get(
   }
 );
 
+
+/*
+  GET /api/admin/customers
+
+  Real customer records from MongoDB.
+*/
+router.get(
+  "/customers",
+  auth,
+  adminOnly,
+  async (req, res) => {
+    try {
+      const customers = await User.find({
+        role: "customer",
+      })
+        .select("name email phone status createdAt")
+        .sort({ createdAt: -1 })
+        .lean();
+
+      res.json(customers);
+    } catch (error) {
+      console.error("Admin customers error:", error);
+
+      res.status(500).json({
+        message: "Failed to load customers",
+      });
+    }
+  }
+);
+
 /*
   GET /api/admin/businesses/pending
 
@@ -373,54 +403,3 @@ router.post(
 );
 
 module.exports = router;
-
-/*
-  GET /api/admin/dashboard
-  Admin CRM dashboard summary.
-*/
-router.get(
-  "/dashboard",
-  auth,
-  adminOnly,
-  async (req, res) => {
-    try {
-      const [
-        totalUsers,
-        totalBusinesses,
-        pendingBusinesses,
-        verifiedBusinesses,
-        rejectedBusinesses,
-      ] = await Promise.all([
-        User.countDocuments(),
-        Business.countDocuments(),
-        Business.countDocuments({
-          verificationStatus: {
-            $in: ["pending", "under_review", "more_information_required"],
-          },
-        }),
-        Business.countDocuments({
-          verificationStatus: "verified",
-        }),
-        Business.countDocuments({
-          verificationStatus: "rejected",
-        }),
-      ]);
-
-      res.json({
-        stats: {
-          totalUsers,
-          totalBusinesses,
-          pendingBusinesses,
-          verifiedBusinesses,
-          rejectedBusinesses,
-        },
-      });
-    } catch (error) {
-      console.error("Admin dashboard error:", error);
-
-      res.status(500).json({
-        message: "Failed to load admin dashboard",
-      });
-    }
-  }
-);

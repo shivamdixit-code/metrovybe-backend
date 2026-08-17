@@ -34,6 +34,17 @@ function hashEmailVerificationToken(token) {
     .digest("hex");
 }
 
+function createPasswordResetToken() {
+  return require("crypto").randomBytes(32).toString("hex");
+}
+
+function hashPasswordResetToken(token) {
+  return require("crypto")
+    .createHash("sha256")
+    .update(token)
+    .digest("hex");
+}
+
 async function sendEmailVerification(user) {
   const apiKey = process.env.RESEND_API_KEY;
   const from = process.env.EMAIL_FROM || "onboarding@resend.dev";
@@ -501,6 +512,185 @@ router.post("/resend-verification", async (req, res) => {
 /*
   POST /api/auth/login
 */
+
+router.post("/forgot-password", async (req, res) => {
+  try {
+    const email = String(req.body.email || "").trim().toLowerCase();
+
+    if (!email) {
+      return res.status(400).json({
+        message: "Email address is required.",
+      });
+    }
+
+    const user = await User.findOne({ email });
+
+    // Always return the same success message so the endpoint
+    // does not reveal whether an account exists.
+    if (!user) {
+      return res.json({
+        message:
+          "If an account exists with this email, a password reset link has been sent.",
+      });
+    }
+
+    const apiKey = process.env.RESEND_API_KEY;
+    const from = process.env.EMAIL_FROM || "onboarding@resend.dev";
+    const frontendUrl =
+      process.env.FRONTEND_URL ||
+      "https://metrovybe.vercel.app";
+
+    if (!apiKey) {
+      throw new Error("RESEND_API_KEY is not configured");
+    }
+
+    const resend = new Resend(apiKey);
+
+    const token = createPasswordResetToken();
+    const tokenHash = hashPasswordResetToken(token);
+
+    user.passwordResetTokenHash = tokenHash;
+    user.passwordResetTokenExpiresAt = new Date(
+      Date.now() + 30 * 60 * 1000
+    );
+
+    await user.save();
+
+    const resetUrl =
+      `${frontendUrl}/login?resetToken=${encodeURIComponent(token)}` +
+      `&email=${encodeURIComponent(user.email)}`;
+
+    const safeName = String(user.name || "there").replace(/[<>&"]/g, "");
+
+    const result = await resend.emails.send({
+      from,
+      to: [user.email],
+      subject: "Reset your MetroVybe password",
+      html: `
+        <div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto;padding:32px;color:#111;">
+          <h1 style="margin-bottom:8px;">Reset your MetroVybe password</h1>
+
+          <p style="font-size:16px;line-height:1.6;">
+            Hi ${safeName},
+          </p>
+
+          <p style="font-size:16px;line-height:1.6;">
+            We received a request to reset your MetroVybe password.
+          </p>
+
+          <p style="margin:32px 0;">
+            <a
+              href="${resetUrl}"
+              style="display:inline-block;background:#29AB87;color:#fff;text-decoration:none;padding:14px 24px;border-radius:8px;font-weight:700;"
+            >
+              Reset my password
+            </a>
+          </p>
+
+          <p style="font-size:14px;color:#666;line-height:1.5;">
+            This password reset link expires in 30 minutes.
+          </p>
+
+          <p style="font-size:13px;color:#888;line-height:1.5;">
+            If you did not request a password reset, you can safely ignore this email.
+          </p>
+        </div>
+      `,
+    });
+
+    if (result?.error) {
+      console.error("PASSWORD RESET EMAIL ERROR:", result.error);
+
+      user.passwordResetTokenHash = "";
+      user.passwordResetTokenExpiresAt = undefined;
+      await user.save();
+
+      throw new Error("Unable to send password reset email.");
+    }
+
+    console.log("================================");
+    console.log("METROVYBE PASSWORD RESET EMAIL SENT");
+    console.log(`Email: ${user.email}`);
+    console.log("Expires: 30 minutes");
+    console.log("================================");
+
+    return res.json({
+      message:
+        "If an account exists with this email, a password reset link has been sent.",
+    });
+  } catch (error) {
+    console.error("FORGOT PASSWORD ERROR:", error);
+
+    return res.status(500).json({
+      message: "Unable to process password reset request.",
+    });
+  }
+});
+
+
+router.post("/reset-password", async (req, res) => {
+  try {
+    const token = String(req.body.token || "").trim();
+    const email = String(req.body.email || "").trim().toLowerCase();
+    const newPassword = String(req.body.password || "");
+
+    if (!token || !email || !newPassword) {
+      return res.status(400).json({
+        message: "Reset token, email and new password are required.",
+      });
+    }
+
+    if (newPassword.length < 8) {
+      return res.status(400).json({
+        message: "Password must be at least 8 characters long.",
+      });
+    }
+
+    const tokenHash = hashPasswordResetToken(token);
+
+    const user = await User.findOne({
+      email,
+      passwordResetTokenHash: tokenHash,
+    });
+
+    if (!user) {
+      return res.status(400).json({
+        message: "Invalid or expired password reset link.",
+      });
+    }
+
+    if (
+      !user.passwordResetTokenExpiresAt ||
+      user.passwordResetTokenExpiresAt.getTime() < Date.now()
+    ) {
+      user.passwordResetTokenHash = "";
+      user.passwordResetTokenExpiresAt = undefined;
+      await user.save();
+
+      return res.status(400).json({
+        message: "This password reset link has expired. Please request a new one.",
+      });
+    }
+
+    user.password = await bcrypt.hash(newPassword, 12);
+
+    user.passwordResetTokenHash = "";
+    user.passwordResetTokenExpiresAt = undefined;
+
+    await user.save();
+
+    return res.json({
+      message: "Password reset successfully. You can now log in.",
+    });
+  } catch (error) {
+    console.error("RESET PASSWORD ERROR:", error);
+
+    return res.status(500).json({
+      message: "Unable to reset password.",
+    });
+  }
+});
+
 router.post("/login", async (req, res) => {
   try {
     const { email, password, selectedRole } = req.body;

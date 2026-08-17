@@ -170,8 +170,23 @@ router.post("/", auth, async (req, res) => {
       });
     }
 
-    const listing = await Listing.create({
-      ...req.body,
+    const allowedFields = [
+      "title",
+      "category",
+      "description",
+      "location",
+      "latitude",
+      "longitude",
+      "serviceArea",
+      "serviceDetails",
+      "availability",
+      "price",
+      "image",
+      "images",
+      "tags",
+    ];
+
+    const listingData = {
       business: business._id,
 
       // Business listings must be reviewed by MetroVybe.
@@ -179,7 +194,15 @@ router.post("/", auth, async (req, res) => {
 
       // Business cannot self-feature a listing.
       featured: false,
+    };
+
+    allowedFields.forEach((field) => {
+      if (req.body[field] !== undefined) {
+        listingData[field] = req.body[field];
+      }
     });
+
+    const listing = await Listing.create(listingData);
 
     res.status(201).json({
       message: "Listing submitted for review",
@@ -234,6 +257,11 @@ router.put("/:id", auth, async (req, res) => {
       "category",
       "description",
       "location",
+      "latitude",
+      "longitude",
+      "serviceArea",
+      "serviceDetails",
+      "availability",
       "price",
       "image",
       "images",
