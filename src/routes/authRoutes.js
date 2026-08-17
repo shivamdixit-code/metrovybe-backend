@@ -595,6 +595,246 @@ router.post("/login", async (req, res) => {
   }
 });
 
+
+// ==================== WHATSAPP LOGIN OTP ====================
+
+router.post("/send-login-phone-otp", async (req, res) => {
+  try {
+    const phone = String(req.body.phone || "").trim();
+    const selectedRole = String(req.body.selectedRole || "").trim();
+
+    const cleanPhone = phone
+      .replace(/[\s()-]/g, "");
+
+    if (!/^\+[1-9]\d{7,14}$/.test(cleanPhone)) {
+      return res.status(400).json({
+        message: "Please enter a valid international mobile number.",
+      });
+    }
+
+    if (!["customer", "business"].includes(selectedRole)) {
+      return res.status(400).json({
+        message: "Please select Customer or Business.",
+      });
+    }
+
+    const user = await User.findOne({
+      phone: cleanPhone,
+    });
+
+    if (!user) {
+      return res.status(404).json({
+        message: "No account found with this phone number.",
+      });
+    }
+
+    if (user.role !== selectedRole) {
+      return res.status(403).json({
+        message:
+          selectedRole === "business"
+            ? "This account is not a Business account. Please select Customer."
+            : "This account is not a Customer account. Please select Business.",
+      });
+    }
+
+    if (user.status === "suspended") {
+      return res.status(403).json({
+        message: "Your account has been suspended.",
+      });
+    }
+
+    if (!user.phoneVerified) {
+      return res.status(403).json({
+        message: "Please verify your phone number before using WhatsApp login.",
+        code: "PHONE_NOT_VERIFIED",
+      });
+    }
+
+    const now = Date.now();
+
+    if (
+      user.phoneOtpLastSentAt &&
+      now - user.phoneOtpLastSentAt.getTime() < 60000
+    ) {
+      return res.status(429).json({
+        message: "Please wait 60 seconds before requesting another OTP.",
+      });
+    }
+
+    const otp = createPhoneOtp();
+
+    user.phoneOtpHash = hashPhoneOtp(otp);
+    user.phoneOtpExpiresAt = new Date(now + 5 * 60 * 1000);
+    user.phoneOtpAttempts = 0;
+    user.phoneOtpLastSentAt = new Date(now);
+
+    await user.save();
+
+    try {
+      await sendWhatsAppOtp(cleanPhone, otp);
+    } catch (whatsappError) {
+      console.error(
+        "LOGIN WHATSAPP OTP ERROR:",
+        whatsappError.response?.data || whatsappError.message
+      );
+
+      user.phoneOtpHash = "";
+      user.phoneOtpExpiresAt = undefined;
+      user.phoneOtpAttempts = 0;
+      user.phoneOtpLastSentAt = undefined;
+      await user.save();
+
+      return res.status(502).json({
+        message: "Unable to send WhatsApp OTP. Please try again.",
+        code: "WHATSAPP_SEND_FAILED",
+      });
+    }
+
+    return res.json({
+      message: "WhatsApp OTP sent successfully.",
+      sent: true,
+    });
+  } catch (error) {
+    console.error("SEND LOGIN PHONE OTP ERROR:", error);
+
+    return res.status(500).json({
+      message: "Unable to send WhatsApp OTP.",
+    });
+  }
+});
+
+
+router.post("/verify-login-phone-otp", async (req, res) => {
+  try {
+    const phone = String(req.body.phone || "").trim();
+    const otp = String(req.body.otp || "").trim();
+    const selectedRole = String(req.body.selectedRole || "").trim();
+
+    const cleanPhone = phone
+      .replace(/[\s()-]/g, "");
+
+    if (!/^\+[1-9]\d{7,14}$/.test(cleanPhone)) {
+      return res.status(400).json({
+        message: "Please enter a valid international mobile number.",
+      });
+    }
+
+    if (!otp) {
+      return res.status(400).json({
+        message: "Please enter the OTP.",
+      });
+    }
+
+    if (!["customer", "business"].includes(selectedRole)) {
+      return res.status(400).json({
+        message: "Please select Customer or Business.",
+      });
+    }
+
+    const user = await User.findOne({
+      phone: cleanPhone,
+    });
+
+    if (!user) {
+      return res.status(404).json({
+        message: "No account found with this phone number.",
+      });
+    }
+
+    if (user.role !== selectedRole) {
+      return res.status(403).json({
+        message:
+          selectedRole === "business"
+            ? "This account is not a Business account. Please select Customer."
+            : "This account is not a Customer account. Please select Business.",
+      });
+    }
+
+    if (user.status === "suspended") {
+      return res.status(403).json({
+        message: "Your account has been suspended.",
+      });
+    }
+
+    if (!user.phoneVerified) {
+      return res.status(403).json({
+        message: "Please verify your phone number before logging in.",
+        code: "PHONE_NOT_VERIFIED",
+      });
+    }
+
+    if (!user.phoneOtpHash || !user.phoneOtpExpiresAt) {
+      return res.status(400).json({
+        message: "Please request a new OTP.",
+      });
+    }
+
+    if (user.phoneOtpExpiresAt.getTime() < Date.now()) {
+      user.phoneOtpHash = "";
+      user.phoneOtpExpiresAt = undefined;
+      user.phoneOtpAttempts = 0;
+      await user.save();
+
+      return res.status(400).json({
+        message: "OTP has expired. Please request a new OTP.",
+      });
+    }
+
+    if (user.phoneOtpAttempts >= 5) {
+      return res.status(429).json({
+        message: "Too many incorrect attempts. Please request a new OTP.",
+      });
+    }
+
+    if (hashPhoneOtp(otp) !== user.phoneOtpHash) {
+      user.phoneOtpAttempts += 1;
+      await user.save();
+
+      return res.status(400).json({
+        message: "Invalid OTP.",
+      });
+    }
+
+    user.phoneOtpHash = "";
+    user.phoneOtpExpiresAt = undefined;
+    user.phoneOtpAttempts = 0;
+    user.phoneOtpLastSentAt = undefined;
+
+    await user.save();
+
+    const token = createToken(user);
+
+    let business = null;
+
+    if (user.role === "business") {
+      business = await Business.findOne({
+        owner: user._id,
+      });
+    }
+
+    return res.json({
+      message: "Login successful",
+      token,
+      user: {
+        id: user._id,
+        name: user.name,
+        email: user.email,
+        phone: user.phone,
+        role: user.role,
+        status: user.status,
+      },
+      business,
+    });
+  } catch (error) {
+    console.error("VERIFY LOGIN PHONE OTP ERROR:", error);
+    console.error("VERIFY LOGIN PHONE OTP MESSAGE:", error.message);
+
+    return res.status(500).json({
+      message: "Unable to verify WhatsApp OTP.",
+    });
+  }
+});
+
 // ==================== PHONE OTP ====================
 
 const crypto = require("crypto");
