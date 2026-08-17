@@ -402,22 +402,50 @@ async function sendWhatsAppOtp(phone, otp) {
     `This OTP is valid for 5 minutes.\n` +
     `Do not share this code with anyone.`;
 
-  const response = await axios.post(
-    `${apiUrl}/message/sendText/${encodeURIComponent(instance)}`,
-    {
-      number,
-      text: message,
-    },
-    {
-      headers: {
-        apikey: apiKey,
-        "Content-Type": "application/json",
-      },
-      timeout: 15000,
-    }
-  );
+  let lastError;
 
-  return response.data;
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    try {
+      console.log(
+        `EVOLUTION WHATSAPP OTP ATTEMPT ${attempt}/3`,
+        { number, instance }
+      );
+
+      const response = await axios.post(
+        `${apiUrl}/message/sendText/${encodeURIComponent(instance)}`,
+        {
+          number,
+          text: message,
+        },
+        {
+          headers: {
+            apikey: apiKey,
+            "Content-Type": "application/json",
+          },
+          timeout: 20000,
+        }
+      );
+
+      console.log(
+        `EVOLUTION WHATSAPP OTP SENT ON ATTEMPT ${attempt}`
+      );
+
+      return response.data;
+    } catch (error) {
+      lastError = error;
+
+      console.error(
+        `EVOLUTION WHATSAPP OTP ATTEMPT ${attempt}/3 FAILED:`,
+        error.response?.data || error.message
+      );
+
+      if (attempt < 3) {
+        await new Promise(resolve => setTimeout(resolve, 3000));
+      }
+    }
+  }
+
+  throw lastError;
 }
 
 router.post("/send-signup-phone-otp", async (req, res) => {
