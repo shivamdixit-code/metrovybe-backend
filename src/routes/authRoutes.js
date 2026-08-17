@@ -664,7 +664,11 @@ async function sendWhatsAppOtp(phone, otp) {
 
       console.error(
         `EVOLUTION WHATSAPP OTP ATTEMPT ${attempt}/3 FAILED:`,
-        error.response?.data || error.message
+        JSON.stringify(
+          error.response?.data || { message: error.message },
+          null,
+          2
+        )
       );
 
       if (attempt < 3) {
