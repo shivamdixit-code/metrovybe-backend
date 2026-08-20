@@ -166,6 +166,8 @@ router.post("/register", async (req, res) => {
       city,
       state,
       pincode,
+      businessLatitude,
+      businessLongitude,
     } = req.body;
 
     if (!name || !email || !password) {
@@ -303,6 +305,33 @@ router.post("/register", async (req, res) => {
             "Business name, category, address and city are required",
         });
       }
+
+      if (
+        businessLatitude === undefined ||
+        businessLongitude === undefined ||
+        businessLatitude === null ||
+        businessLongitude === null
+      ) {
+        return res.status(400).json({
+          message: "Precise business location is required.",
+        });
+      }
+
+      const businessLat = Number(businessLatitude);
+      const businessLng = Number(businessLongitude);
+
+      if (
+        !Number.isFinite(businessLat) ||
+        !Number.isFinite(businessLng) ||
+        businessLat < -90 ||
+        businessLat > 90 ||
+        businessLng < -180 ||
+        businessLng > 180
+      ) {
+        return res.status(400).json({
+          message: "Please provide a valid precise business location.",
+        });
+      }
     }
 
     const existingUser = await User.findOne({
@@ -353,6 +382,10 @@ router.post("/register", async (req, res) => {
         state: state || "",
         pincode: pincode || "",
         verificationStatus: "pending",
+        location: {
+          latitude: Number(businessLatitude),
+          longitude: Number(businessLongitude),
+        },
       });
     }
 
@@ -1125,6 +1158,10 @@ async function sendWhatsAppOtp(phone, otp) {
         `EVOLUTION WHATSAPP OTP SENT ON ATTEMPT ${attempt}`
       );
 
+      console.log(
+        "EVOLUTION RESPONSE:",
+        JSON.stringify(response.data, null, 2)
+      );
       return response.data;
     } catch (error) {
       lastError = error;
