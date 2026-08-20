@@ -3,6 +3,7 @@ require("dotenv").config();
 const express = require("express");
 const cors = require("cors");
 const connectDB = require("./config/db");
+const cloudinary = require("./config/cloudinary");
 
 const app = express();
 
@@ -16,6 +17,25 @@ app.use(
 );
 
 app.use(express.json());
+
+
+app.get("/api/health/cloudinary", async (req, res) => {
+  try {
+    await cloudinary.api.ping();
+
+    res.json({
+      success: true,
+      message: "Cloudinary connection successful",
+    });
+  } catch (error) {
+    console.error("Cloudinary health check failed:", error.message);
+
+    res.status(500).json({
+      success: false,
+      message: "Cloudinary connection failed",
+    });
+  }
+});
 
 app.get("/", (req, res) => {
   res.json({
