@@ -763,9 +763,9 @@ router.post("/login", async (req, res) => {
       });
     }
 
-    if (!selectedRole || !["customer", "business"].includes(selectedRole)) {
+    if (!selectedRole || !["customer", "business", "admin"].includes(selectedRole)) {
       return res.status(400).json({
-        message: "Please select Customer or Business",
+        message: "Please select Customer, Business, or Admin",
       });
     }
 
@@ -801,7 +801,9 @@ router.post("/login", async (req, res) => {
         message:
           selectedRole === "business"
             ? "This account is not a Business account. Please select Customer."
-            : "This account is not a Customer account. Please select Business.",
+            : selectedRole === "admin"
+              ? "This account is not an Admin account."
+              : "This account is not a Customer account. Please select Business.",
       });
     }
 
