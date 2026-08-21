@@ -458,35 +458,44 @@ router.get("/verify-email", async (req, res) => {
     const token = String(req.query.token || "").trim();
     const email = String(req.query.email || "").trim().toLowerCase();
 
+    const frontendUrl =
+      process.env.FRONTEND_URL || "https://metrovybe.vercel.app";
+
+    const redirect = (status) =>
+      res.redirect(
+        `${frontendUrl}/email-verification?status=${encodeURIComponent(status)}`
+      );
+
     if (!token || !email) {
-      return res.status(400).json({
-        message: "Verification link is incomplete.",
-        code: "INVALID_VERIFICATION_LINK",
-      });
+      return redirect("invalid");
+    }
+
+    const user = await User.findOne({ email });
+
+    if (!user) {
+      return redirect("invalid");
+    }
+
+    // If the account is already verified, clicking the old link again
+    // should show the proper UI instead of raw JSON.
+    if (user.emailVerified === true) {
+      return redirect("already-verified");
     }
 
     const tokenHash = hashEmailVerificationToken(token);
 
-    const user = await User.findOne({
-      email,
-      emailVerificationTokenHash: tokenHash,
-    });
-
-    if (!user) {
-      return res.status(400).json({
-        message: "This verification link is invalid or has already been used.",
-        code: "INVALID_VERIFICATION_TOKEN",
-      });
+    if (
+      !user.emailVerificationTokenHash ||
+      user.emailVerificationTokenHash !== tokenHash
+    ) {
+      return redirect("invalid");
     }
 
     if (
       !user.emailVerificationTokenExpiresAt ||
       user.emailVerificationTokenExpiresAt.getTime() < Date.now()
     ) {
-      return res.status(400).json({
-        message: "This verification link has expired. Please request a new one.",
-        code: "VERIFICATION_TOKEN_EXPIRED",
-      });
+      return redirect("expired");
     }
 
     user.emailVerified = true;
@@ -495,15 +504,16 @@ router.get("/verify-email", async (req, res) => {
 
     await user.save();
 
-    return res.redirect(
-      `${process.env.FRONTEND_URL || "https://metrovybe.vercel.app"}/profile?emailVerified=true`
-    );
+    return redirect("success");
   } catch (error) {
     console.error("VERIFY EMAIL ERROR:", error);
 
-    return res.status(500).json({
-      message: "Unable to verify email.",
-    });
+    const frontendUrl =
+      process.env.FRONTEND_URL || "https://metrovybe.vercel.app";
+
+    return res.redirect(
+      `${frontendUrl}/email-verification?status=invalid`
+    );
   }
 });;
 
