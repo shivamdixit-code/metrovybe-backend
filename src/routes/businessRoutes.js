@@ -118,6 +118,10 @@ router.post("/verification", auth, async (req, res) => {
 */
 router.get("/me", auth, async (req, res) => {
   try {
+    res.set("Cache-Control", "no-store, no-cache, must-revalidate, proxy-revalidate");
+    res.set("Pragma", "no-cache");
+    res.set("Expires", "0");
+
     if (req.user.role !== "business") {
       return res.status(403).json({
         message: "Business account required",
