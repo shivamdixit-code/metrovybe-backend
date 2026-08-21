@@ -414,6 +414,8 @@ router.post("/register", async (req, res) => {
       });
     }
 
+    const token = createToken(user);
+
     return res.status(201).json({
       message:
         role === "business"
@@ -421,6 +423,7 @@ router.post("/register", async (req, res) => {
           : "Account created. Please check your email to verify your account.",
       emailVerificationRequired: true,
       emailVerified: false,
+      token,
       user: {
         id: user._id,
         name: user.name,
