@@ -1,0 +1,766 @@
+const express = require("express");
+const bcrypt = require("bcryptjs");
+const jwt = require("jsonwebtoken");
+
+const User = require("../models/User");
+const Business = require("../models/Business");
+const SignupPhoneOtp = require("../models/SignupPhoneOtp");
+const axios = require("axios");
+
+const router = express.Router();
+
+function createToken(user) {
+  return jwt.sign(
+    {
+      id: user._id,
+      role: user.role,
+    },
+    process.env.JWT_SECRET,
+    {
+      expiresIn: "7d",
+    }
+  );
+}
+
+/*
+  POST /api/auth/register
+
+  Customer:
+  {
+    name,
+    email,
+    phone,
+    password,
+    role: "customer"
+  }
+
+  Business:
+  {
+    name,
+    email,
+    phone,
+    password,
+    role: "business",
+    businessName,
+    category,
+    address,
+    city,
+    state,
+    pincode
+  }
+*/
+router.post("/register", async (req, res) => {
+  try {
+    const {
+      name,
+      email,
+      phone,
+      gender,
+      dateOfBirth,
+      latitude,
+      longitude,
+      locationLabel,
+      password,
+      role = "customer",
+      businessName,
+      category,
+      address,
+      city,
+      state,
+      pincode,
+    } = req.body;
+
+    if (!name || !email || !password) {
+      return res.status(400).json({
+        message: "Name, email and password are required",
+      });
+    }
+
+    const normalizedEmail = String(email).trim().toLowerCase();
+
+    console.log("===== REGISTER EMAIL DEBUG =====");
+    console.log("RAW EMAIL:", JSON.stringify(email));
+    console.log("NORMALIZED EMAIL:", JSON.stringify(normalizedEmail));
+    console.log("EMAIL LENGTH:", normalizedEmail.length);
+    console.log("EMAIL CHARS:", [...normalizedEmail].map((c) => `${c}=${c.charCodeAt(0)}`));
+
+    const emailPattern =
+      /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
+
+    if (!emailPattern.test(normalizedEmail)) {
+      return res.status(400).json({
+        message: "Please enter a valid email address.",
+      });
+    }
+
+    if (!["customer", "business"].includes(role)) {
+      return res.status(400).json({
+        message: "Invalid registration role",
+      });
+    }
+
+    // Prevent registration with an email that already exists.
+    const existingEmailUser = await User.findOne({
+      email: normalizedEmail,
+    }).select("_id");
+
+    if (existingEmailUser) {
+      return res.status(409).json({
+        message: "An account with this email address already exists. Please log in instead.",
+      });
+    }
+
+    if (role === "customer") {
+      const cleanPhone = String(phone || "").replace(/[\s-]/g, "");
+
+      const validPhone =
+        /^\+\d{8,15}$/.test(cleanPhone);
+
+      if (!validPhone) {
+        return res.status(400).json({
+          message: "Please enter a valid international mobile number.",
+        });
+      }
+
+      const allowedGenders = [
+        "male",
+        "female",
+        "non-binary",
+        "prefer-not-to-say",
+      ];
+
+      if (!allowedGenders.includes(gender)) {
+        return res.status(400).json({
+          message: "Gender is required.",
+        });
+      }
+
+      if (!dateOfBirth) {
+        return res.status(400).json({
+          message: "Date of birth is required.",
+        });
+      }
+
+      const dob = new Date(dateOfBirth);
+
+      if (Number.isNaN(dob.getTime())) {
+        return res.status(400).json({
+          message: "Please enter a valid date of birth.",
+        });
+      }
+
+      const today = new Date();
+
+      if (dob >= today) {
+        return res.status(400).json({
+          message: "Date of birth must be in the past.",
+        });
+      }
+
+      if (
+        latitude === undefined ||
+        longitude === undefined ||
+        latitude === null ||
+        longitude === null
+      ) {
+        return res.status(400).json({
+          message: "Precise location is required.",
+        });
+      }
+
+      const lat = Number(latitude);
+      const lng = Number(longitude);
+
+      if (
+        !Number.isFinite(lat) ||
+        !Number.isFinite(lng) ||
+        lat < -90 ||
+        lat > 90 ||
+        lng < -180 ||
+        lng > 180
+      ) {
+        return res.status(400).json({
+          message: "Please provide a valid precise location.",
+        });
+      }
+    }
+
+    if (role === "business") {
+      if (!businessName || !category || !address || !city) {
+        return res.status(400).json({
+          message:
+            "Business name, category, address and city are required",
+        });
+      }
+    }
+
+    const existingUser = await User.findOne({
+      email: normalizedEmail,
+    });
+
+    if (existingUser) {
+      return res.status(409).json({
+        message: "An account with this email already exists",
+      });
+    }
+
+    const hashedPassword = await bcrypt.hash(password, 12);
+
+    const user = await User.create({
+      name,
+      email: normalizedEmail,
+      phone: phone || "",
+      password: hashedPassword,
+      role,
+      status: role === "business" ? "pending" : "active",
+      ...(role === "customer"
+        ? {
+            gender,
+            dateOfBirth: new Date(dateOfBirth),
+            location: {
+              latitude: Number(latitude),
+              longitude: Number(longitude),
+              label: String(locationLabel || "").trim(),
+            },
+          }
+        : {}),
+    });
+
+    let business = null;
+
+    if (role === "business") {
+      business = await Business.create({
+        owner: user._id,
+        businessName,
+        category,
+        phone: phone || "",
+        email,
+        address,
+        city,
+        state: state || "",
+        pincode: pincode || "",
+        verificationStatus: "pending",
+      });
+    }
+
+    const token = createToken(user);
+
+    return res.status(201).json({
+      message:
+        role === "business"
+          ? "Business account created. Verification is required before listings can go live."
+          : "Customer account created successfully.",
+      token,
+      user: {
+        id: user._id,
+        name: user.name,
+        email: user.email,
+        phone: user.phone,
+        role: user.role,
+        status: user.status,
+        ...(user.role === "customer"
+          ? {
+              gender: user.gender,
+              dateOfBirth: user.dateOfBirth,
+              location: user.location,
+            }
+          : {}),
+      },
+      business,
+    });
+  } catch (error) {
+    console.error(error);
+
+    return res.status(500).json({
+      message: "Registration failed",
+      error: error.message,
+    });
+  }
+});
+
+/*
+  POST /api/auth/login
+*/
+router.post("/login", async (req, res) => {
+  try {
+    const { email, password, selectedRole } = req.body;
+
+    if (!email || !password) {
+      return res.status(400).json({
+        message: "Email and password are required",
+      });
+    }
+
+    if (!selectedRole || !["customer", "business"].includes(selectedRole)) {
+      return res.status(400).json({
+        message: "Please select Customer or Business",
+      });
+    }
+
+    const user = await User.findOne({
+      email: email.toLowerCase(),
+    });
+
+    if (!user) {
+      return res.status(401).json({
+        message: "Invalid email or password",
+      });
+    }
+
+    const passwordCorrect = await bcrypt.compare(
+      password,
+      user.password
+    );
+
+    if (!passwordCorrect) {
+      return res.status(401).json({
+        message: "Invalid email or password",
+      });
+    }
+
+    if (user.status === "suspended") {
+      return res.status(403).json({
+        message: "Your account has been suspended",
+      });
+    }
+
+    if (user.role !== selectedRole) {
+      return res.status(403).json({
+        message:
+          selectedRole === "business"
+            ? "This account is not a Business account. Please select Customer."
+            : "This account is not a Customer account. Please select Business.",
+      });
+    }
+
+    const token = createToken(user);
+
+    let business = null;
+
+    if (user.role === "business") {
+      business = await Business.findOne({
+        owner: user._id,
+      });
+    }
+
+    return res.json({
+      message: "Login successful",
+      token,
+      user: {
+        id: user._id,
+        name: user.name,
+        email: user.email,
+        phone: user.phone,
+        role: user.role,
+        status: user.status,
+      },
+      business,
+    });
+  } catch (error) {
+    console.error("LOGIN ERROR:", error);
+    console.error("LOGIN ERROR MESSAGE:", error.message);
+    console.error("LOGIN ERROR STACK:", error.stack);
+
+    return res.status(500).json({
+      message: "Login failed",
+    });
+  }
+});
+
+// ==================== PHONE OTP ====================
+
+const crypto = require("crypto");
+
+function createPhoneOtp() {
+  return String(crypto.randomInt(100000, 1000000));
+}
+
+function hashPhoneOtp(otp) {
+  return crypto
+    .createHash("sha256")
+    .update(otp)
+    .digest("hex");
+}
+
+
+// ==================== SIGNUP PHONE OTP ====================
+// Signup OTP is stored in MongoDB and delivered through Evolution API.
+
+async function sendWhatsAppOtp(phone, otp) {
+  const apiUrl = String(process.env.EVOLUTION_API_URL || "").replace(/\/$/, "");
+  const apiKey = process.env.EVOLUTION_API_KEY;
+  const instance = process.env.EVOLUTION_INSTANCE;
+
+  if (!apiUrl || !apiKey || !instance) {
+    throw new Error("Evolution API environment variables are not configured.");
+  }
+
+  const number = String(phone).replace(/\D/g, "");
+
+  const message =
+    `MetroVybe verification code: ${otp}\n\n` +
+    `This OTP is valid for 5 minutes.\n` +
+    `Do not share this code with anyone.`;
+
+  let lastError;
+
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    try {
+      console.log(
+        `EVOLUTION WHATSAPP OTP ATTEMPT ${attempt}/3`,
+        { number, instance }
+      );
+
+      const response = await axios.post(
+        `${apiUrl}/message/sendText/${encodeURIComponent(instance)}`,
+        {
+          number,
+          text: message,
+        },
+        {
+          headers: {
+            apikey: apiKey,
+            "Content-Type": "application/json",
+          },
+          timeout: 20000,
+        }
+      );
+
+      console.log(
+        `EVOLUTION WHATSAPP OTP SENT ON ATTEMPT ${attempt}`
+      );
+
+      return response.data;
+    } catch (error) {
+      lastError = error;
+
+      console.error(
+        `EVOLUTION WHATSAPP OTP ATTEMPT ${attempt}/3 FAILED:`,
+        error.response?.data || error.message
+      );
+
+      if (attempt < 3) {
+        await new Promise(resolve => setTimeout(resolve, 3000));
+      }
+    }
+  }
+
+  throw lastError;
+}
+
+router.post("/send-signup-phone-otp", async (req, res) => {
+  try {
+    const phone = String(req.body.phone || "").trim();
+
+    const cleanPhone = String(phone)
+      .trim()
+      .replace(/[\s()-]/g, "");
+
+    const validPhone =
+      /^\+[1-9]\d{7,14}$/.test(cleanPhone);
+
+    if (!validPhone) {
+      return res.status(400).json({
+        message: "Please enter a valid international mobile number.",
+      });
+    }
+
+    const existingUser = await User.findOne({
+      phone: cleanPhone,
+    });
+
+    if (existingUser) {
+      return res.status(409).json({
+        message:
+          "An account already exists with this phone number. Please log in instead.",
+      });
+    }
+
+    const now = new Date();
+
+    let record = await SignupPhoneOtp.findOne({
+      phone: cleanPhone,
+    });
+
+    if (
+      record &&
+      record.lastSentAt &&
+      now.getTime() - record.lastSentAt.getTime() < 60000
+    ) {
+      return res.status(429).json({
+        message: "Please wait 60 seconds before requesting another OTP.",
+      });
+    }
+
+    const otp = createPhoneOtp();
+
+    if (!record) {
+      record = new SignupPhoneOtp({
+        phone: cleanPhone,
+      });
+    }
+
+    record.otpHash = hashPhoneOtp(otp);
+    record.expiresAt = new Date(now.getTime() + 5 * 60 * 1000);
+    record.attempts = 0;
+    record.lastSentAt = now;
+    record.verified = false;
+
+    await record.save();
+
+    try {
+      await sendWhatsAppOtp(cleanPhone, otp);
+    } catch (whatsappError) {
+      console.error(
+        "EVOLUTION WHATSAPP OTP ERROR:",
+        whatsappError.response?.data || whatsappError.message
+      );
+
+      await SignupPhoneOtp.deleteOne({
+        phone: cleanPhone,
+      });
+
+      return res.status(502).json({
+        message: "Unable to send OTP through WhatsApp.",
+      });
+    }
+
+    console.log("================================");
+    console.log("METROVYBE SIGNUP WHATSAPP OTP SENT");
+    console.log(`Phone: ${cleanPhone}`);
+    console.log("OTP: [HIDDEN]");
+    console.log("Expires: 5 minutes");
+    console.log("================================");
+
+    return res.json({
+      message: "OTP sent successfully to WhatsApp.",
+      verified: false,
+    });
+  } catch (error) {
+    console.error("SEND SIGNUP PHONE OTP ERROR:", error);
+
+    return res.status(500).json({
+      message: "Unable to send signup phone OTP.",
+    });
+  }
+});
+
+router.post("/verify-signup-phone-otp", async (req, res) => {
+  try {
+    const phone = String(req.body.phone || "").trim();
+    const otp = String(req.body.otp || "").trim();
+
+    if (!phone || !otp) {
+      return res.status(400).json({
+        message: "Phone number and OTP are required.",
+      });
+    }
+
+    const cleanPhone = phone.replace(/[\s-]/g, "");
+
+    const existingUser = await User.findOne({
+      phone: cleanPhone,
+    });
+
+    if (existingUser) {
+      return res.status(409).json({
+        message: "An account already exists with this phone number.",
+      });
+    }
+
+    const record = await SignupPhoneOtp.findOne({
+      phone: cleanPhone,
+    });
+
+    if (!record) {
+      return res.status(400).json({
+        message: "Please request a new OTP.",
+      });
+    }
+
+    if (record.expiresAt.getTime() < Date.now()) {
+      await SignupPhoneOtp.deleteOne({
+        phone: cleanPhone,
+      });
+
+      return res.status(400).json({
+        message: "OTP has expired. Please request a new OTP.",
+      });
+    }
+
+    if (record.attempts >= 5) {
+      await SignupPhoneOtp.deleteOne({
+        phone: cleanPhone,
+      });
+
+      return res.status(429).json({
+        message:
+          "Too many incorrect attempts. Please request a new OTP.",
+      });
+    }
+
+    if (hashPhoneOtp(otp) !== record.otpHash) {
+      record.attempts += 1;
+      await record.save();
+
+      return res.status(400).json({
+        message: "Invalid OTP.",
+      });
+    }
+
+    record.verified = true;
+    await record.save();
+
+    return res.json({
+      message: "Phone number verified successfully.",
+      verified: true,
+    });
+  } catch (error) {
+    console.error("VERIFY SIGNUP PHONE OTP ERROR:", error);
+
+    return res.status(500).json({
+      message: "Unable to verify signup phone OTP.",
+    });
+  }
+});
+
+router.post("/send-phone-otp", async (req, res) => {
+  try {
+    const phone = String(req.body.phone || "").trim();
+
+    if (!phone) {
+      return res.status(400).json({
+        message: "Phone number is required.",
+      });
+    }
+
+    const user = await User.findOne({ phone });
+
+    if (!user) {
+      return res.status(404).json({
+        message: "No account found with this phone number.",
+      });
+    }
+
+    if (user.phoneVerified) {
+      return res.json({
+        message: "Phone number is already verified.",
+        verified: true,
+      });
+    }
+
+    const now = Date.now();
+
+    if (
+      user.phoneOtpLastSentAt &&
+      now - user.phoneOtpLastSentAt.getTime() < 60000
+    ) {
+      return res.status(429).json({
+        message: "Please wait 60 seconds before requesting another OTP.",
+      });
+    }
+
+    const otp = createPhoneOtp();
+
+    user.phoneOtpHash = hashPhoneOtp(otp);
+    user.phoneOtpExpiresAt = new Date(now + 5 * 60 * 1000);
+    user.phoneOtpAttempts = 0;
+    user.phoneOtpLastSentAt = new Date(now);
+
+    await user.save();
+
+    console.log("================================");
+    console.log("METROVYBE PHONE OTP");
+    console.log(`Phone: ${phone}`);
+    console.log(`OTP: ${otp}`);
+    console.log("Expires: 5 minutes");
+    console.log("================================");
+
+    return res.json({
+      message: "OTP generated successfully.",
+      verified: false,
+    });
+  } catch (error) {
+    console.error("SEND PHONE OTP ERROR:", error);
+
+    return res.status(500).json({
+      message: "Unable to send phone OTP.",
+    });
+  }
+});
+
+router.post("/verify-phone-otp", async (req, res) => {
+  try {
+    const phone = String(req.body.phone || "").trim();
+    const otp = String(req.body.otp || "").trim();
+
+    if (!phone || !otp) {
+      return res.status(400).json({
+        message: "Phone number and OTP are required.",
+      });
+    }
+
+    const user = await User.findOne({ phone });
+
+    if (!user) {
+      return res.status(404).json({
+        message: "No account found with this phone number.",
+      });
+    }
+
+    if (user.phoneVerified) {
+      return res.json({
+        message: "Phone number is already verified.",
+        verified: true,
+      });
+    }
+
+    if (!user.phoneOtpHash || !user.phoneOtpExpiresAt) {
+      return res.status(400).json({
+        message: "Please request a new OTP.",
+      });
+    }
+
+    if (user.phoneOtpExpiresAt.getTime() < Date.now()) {
+      return res.status(400).json({
+        message: "OTP has expired. Please request a new OTP.",
+      });
+    }
+
+    if (user.phoneOtpAttempts >= 5) {
+      return res.status(429).json({
+        message: "Too many incorrect attempts. Please request a new OTP.",
+      });
+    }
+
+    if (hashPhoneOtp(otp) !== user.phoneOtpHash) {
+      user.phoneOtpAttempts += 1;
+      await user.save();
+
+      return res.status(400).json({
+        message: "Invalid OTP.",
+      });
+    }
+
+    user.phoneVerified = true;
+    user.phoneOtpHash = "";
+    user.phoneOtpExpiresAt = undefined;
+    user.phoneOtpAttempts = 0;
+    user.phoneOtpLastSentAt = undefined;
+
+    await user.save();
+
+    return res.json({
+      message: "Phone number verified successfully.",
+      verified: true,
+    });
+  } catch (error) {
+    console.error("VERIFY PHONE OTP ERROR:", error);
+
+    return res.status(500).json({
+      message: "Unable to verify phone number.",
+    });
+  }
+});
+
+module.exports = router;
