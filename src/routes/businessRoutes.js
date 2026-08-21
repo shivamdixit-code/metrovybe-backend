@@ -50,6 +50,20 @@ router.post("/verification", auth, async (req, res) => {
             "Each document requires documentType and fileUrl",
         });
       }
+
+      if (typeof document.fileUrl !== "string" ||
+          !document.fileUrl.startsWith("https://")) {
+        return res.status(400).json({
+          message: "Each verification document must contain a valid uploaded file URL",
+        });
+      }
+
+      if (document.documentNumber !== undefined &&
+          typeof document.documentNumber !== "string") {
+        return res.status(400).json({
+          message: "Document number must be a string",
+        });
+      }
     }
 
     let verification = await BusinessVerification.findOne({
