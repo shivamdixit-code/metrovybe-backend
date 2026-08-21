@@ -402,4 +402,164 @@ router.post(
   }
 );
 
+
+/*
+  GET /api/admin/listings/pending
+
+  Admin gets listings waiting for moderation.
+*/
+router.get(
+  "/listings/pending",
+  auth,
+  adminOnly,
+  async (req, res) => {
+    try {
+      const Listing = require("../models/Listing");
+
+      const listings = await Listing.find({
+        status: "pending",
+      })
+        .populate(
+          "business",
+          "businessName category city state verificationStatus logo phone email"
+        )
+        .sort({ createdAt: -1 })
+        .lean();
+
+      res.json({
+        listings,
+        total: listings.length,
+      });
+    } catch (error) {
+      console.error("Admin pending listings error:", error);
+
+      res.status(500).json({
+        message: "Failed to fetch pending listings",
+      });
+    }
+  }
+);
+
+/*
+  POST /api/admin/listings/:id/approve
+
+  Admin publishes a pending listing.
+*/
+router.post(
+  "/listings/:id/approve",
+  auth,
+  adminOnly,
+  async (req, res) => {
+    try {
+      const Listing = require("../models/Listing");
+
+      const listing = await Listing.findOne({
+        _id: req.params.id,
+        status: "pending",
+      }).populate(
+        "business",
+        "businessName category city state verificationStatus logo"
+      );
+
+      if (!listing) {
+        return res.status(404).json({
+          message: "Pending listing not found",
+        });
+      }
+
+      if (!listing.business) {
+        return res.status(400).json({
+          message: "Cannot publish a listing without a business",
+        });
+      }
+
+      if (listing.business.verificationStatus !== "verified") {
+        return res.status(400).json({
+          message: "Business verification is required before publishing this listing",
+          verificationStatus: listing.business.verificationStatus,
+        });
+      }
+
+      listing.status = "published";
+      listing.rejectionReason = "";
+
+      await listing.save();
+
+      res.json({
+        message: "Listing approved and published successfully",
+        listing,
+      });
+    } catch (error) {
+      console.error("Admin approve listing error:", error);
+
+      if (error.name === "CastError") {
+        return res.status(400).json({
+          message: "Invalid listing ID",
+        });
+      }
+
+      res.status(500).json({
+        message: "Failed to approve listing",
+      });
+    }
+  }
+);
+
+/*
+  POST /api/admin/listings/:id/reject
+
+  Admin rejects a pending listing.
+*/
+router.post(
+  "/listings/:id/reject",
+  auth,
+  adminOnly,
+  async (req, res) => {
+    try {
+      const Listing = require("../models/Listing");
+
+      const { reason } = req.body;
+
+      if (!reason || typeof reason !== "string" || !reason.trim()) {
+        return res.status(400).json({
+          message: "Rejection reason is required",
+        });
+      }
+
+      const listing = await Listing.findOne({
+        _id: req.params.id,
+        status: "pending",
+      });
+
+      if (!listing) {
+        return res.status(404).json({
+          message: "Pending listing not found",
+        });
+      }
+
+      listing.status = "rejected";
+      listing.rejectionReason = reason.trim();
+
+      await listing.save();
+
+      res.json({
+        message: "Listing rejected successfully",
+        listing,
+      });
+    } catch (error) {
+      console.error("Admin reject listing error:", error);
+
+      if (error.name === "CastError") {
+        return res.status(400).json({
+          message: "Invalid listing ID",
+        });
+      }
+
+      res.status(500).json({
+        message: "Failed to reject listing",
+      });
+    }
+  }
+);
+
 module.exports = router;
