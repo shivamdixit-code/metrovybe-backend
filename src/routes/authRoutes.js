@@ -48,8 +48,6 @@ function hashPasswordResetToken(token) {
 async function sendEmailVerification(user) {
   const apiKey = process.env.RESEND_API_KEY;
   const from = process.env.EMAIL_FROM || "onboarding@resend.dev";
-  const frontendUrl =
-    process.env.FRONTEND_URL || "https://metrovybe.vercel.app";
   const backendUrl =
     process.env.BACKEND_URL || "https://metrovybe-backend.onrender.com";
 
@@ -73,7 +71,7 @@ async function sendEmailVerification(user) {
 
   const verificationUrl =
     `${backendUrl}/api/auth/verify-email?token=${encodeURIComponent(token)}` +
-    `&email=${encodeURIComponent(user.email)}`;
+    `&email=${encodeURIComponent(String(user.email).trim().toLowerCase())}`;
 
   const result = await resend.emails.send({
     from,
@@ -507,7 +505,7 @@ router.get("/verify-email", async (req, res) => {
       message: "Unable to verify email.",
     });
   }
-});
+});;
 
 /*
   POST /api/auth/resend-verification
