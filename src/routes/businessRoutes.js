@@ -128,9 +128,21 @@ router.get("/me", auth, async (req, res) => {
       });
     }
 
+    console.log("===== BUSINESS /ME ID DEBUG =====");
+    console.log("JWT user:", req.user);
+    console.log("JWT user.id:", req.user.id);
+
     const business = await Business.findOne({
       owner: req.user.id,
     }).populate("owner", "name email phone role status");
+
+    console.log("Matched Business:", business ? {
+      id: business._id,
+      owner: business.owner?._id,
+      businessName: business.businessName,
+      email: business.email,
+      phone: business.phone,
+    } : null);
 
     if (!business) {
       return res.status(404).json({
