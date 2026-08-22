@@ -835,6 +835,11 @@ router.post("/login", async (req, res) => {
         phone: user.phone,
         role: user.role,
         status: user.status,
+        ...(user.role === "customer"
+          ? {
+              location: user.location,
+            }
+          : {}),
       },
       business,
     });
@@ -1095,6 +1100,11 @@ router.post("/verify-login-phone-otp", async (req, res) => {
         phone: user.phone,
         role: user.role,
         status: user.status,
+        ...(user.role === "customer"
+          ? {
+              location: user.location,
+            }
+          : {}),
       },
       business,
     });

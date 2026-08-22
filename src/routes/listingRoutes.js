@@ -1,6 +1,7 @@
 const express = require("express");
 
 const Listing = require("../models/Listing");
+const User = require("../models/User");
 const Business = require("../models/Business");
 const auth = require("../middleware/auth");
 
@@ -54,10 +55,80 @@ router.get("/", async (req, res) => {
         "business",
         "businessName category city verificationStatus logo"
       )
-      .sort({
-        createdAt: -1,
-      });
+      .lean();
 
+    const token = (req.headers.authorization || "").startsWith("Bearer ")
+      ? req.headers.authorization.split(" ")[1]
+      : null;
+
+    let customerLocation = null;
+
+    if (token) {
+      try {
+        const jwt = require("jsonwebtoken");
+        const decoded = jwt.verify(token, process.env.JWT_SECRET);
+        if (decoded?.role === "customer") {
+          const user = await User.findById(decoded.id).select("location").lean();
+          const latitude = Number(user?.location?.latitude);
+          const longitude = Number(user?.location?.longitude);
+
+          if (
+            Number.isFinite(latitude) &&
+            Number.isFinite(longitude) &&
+            latitude >= -90 && latitude <= 90 &&
+            longitude >= -180 && longitude <= 180
+          ) {
+            customerLocation = { latitude, longitude };
+          }
+        }
+      } catch {
+        customerLocation = null;
+      }
+    }
+
+    if (customerLocation) {
+      const distanceKm = (lat1, lon1, lat2, lon2) => {
+        const toRad = (value) => (value * Math.PI) / 180;
+        const dLat = toRad(lat2 - lat1);
+        const dLon = toRad(lon2 - lon1);
+        const a =
+          Math.sin(dLat / 2) ** 2 +
+          Math.cos(toRad(lat1)) *
+          Math.cos(toRad(lat2)) *
+          Math.sin(dLon / 2) ** 2;
+        return 6371 * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+      };
+
+      listings.sort((a, b) => {
+        const aLat = Number(a.latitude);
+        const aLng = Number(a.longitude);
+        const bLat = Number(b.latitude);
+        const bLng = Number(b.longitude);
+
+        const aValid = Number.isFinite(aLat) && Number.isFinite(aLng);
+        const bValid = Number.isFinite(bLat) && Number.isFinite(bLng);
+
+        if (!aValid && !bValid) return 0;
+        if (!aValid) return 1;
+        if (!bValid) return -1;
+
+        return distanceKm(
+          customerLocation.latitude,
+          customerLocation.longitude,
+          aLat,
+          aLng
+        ) - distanceKm(
+          customerLocation.latitude,
+          customerLocation.longitude,
+          bLat,
+          bLng
+        );
+      });
+    } else {
+      listings.sort(
+        (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
+      );
+    }
     res.json(listings);
   } catch (error) {
     console.error(error);
