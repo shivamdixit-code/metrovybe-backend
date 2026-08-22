@@ -404,6 +404,142 @@ router.post(
 
 
 /*
+  POST /api/admin/businesses/:id/documents/:documentId/approve
+
+  Admin approves one submitted business document.
+*/
+router.post(
+  "/businesses/:id/documents/:documentId/approve",
+  auth,
+  adminOnly,
+  async (req, res) => {
+    try {
+      const business = await Business.findById(req.params.id);
+
+      if (!business) {
+        return res.status(404).json({
+          message: "Business not found",
+        });
+      }
+
+      const verification = await BusinessVerification.findOne({
+        business: business._id,
+      });
+
+      if (!verification) {
+        return res.status(404).json({
+          message: "Verification submission not found",
+        });
+      }
+
+      const document = verification.documents.id(req.params.documentId);
+
+      if (!document) {
+        return res.status(404).json({
+          message: "Document not found",
+        });
+      }
+
+      document.status = "approved";
+      document.rejectionReason = "";
+
+      await verification.save();
+
+      res.json({
+        message: "Document approved successfully",
+        document,
+        verification,
+      });
+    } catch (error) {
+      console.error("Admin approve document error:", error);
+
+      if (error.name === "CastError") {
+        return res.status(400).json({
+          message: "Invalid business or document ID",
+        });
+      }
+
+      res.status(500).json({
+        message: "Failed to approve document",
+      });
+    }
+  }
+);
+
+
+/*
+  POST /api/admin/businesses/:id/documents/:documentId/reject
+
+  Admin rejects one submitted business document.
+*/
+router.post(
+  "/businesses/:id/documents/:documentId/reject",
+  auth,
+  adminOnly,
+  async (req, res) => {
+    try {
+      const business = await Business.findById(req.params.id);
+
+      if (!business) {
+        return res.status(404).json({
+          message: "Business not found",
+        });
+      }
+
+      const verification = await BusinessVerification.findOne({
+        business: business._id,
+      });
+
+      if (!verification) {
+        return res.status(404).json({
+          message: "Verification submission not found",
+        });
+      }
+
+      const document = verification.documents.id(req.params.documentId);
+
+      if (!document) {
+        return res.status(404).json({
+          message: "Document not found",
+        });
+      }
+
+      const { reason } = req.body;
+
+      if (!reason || typeof reason !== "string" || !reason.trim()) {
+        return res.status(400).json({
+          message: "Document rejection reason is required",
+        });
+      }
+
+      document.status = "rejected";
+      document.rejectionReason = reason.trim();
+
+      await verification.save();
+
+      res.json({
+        message: "Document rejected successfully",
+        document,
+        verification,
+      });
+    } catch (error) {
+      console.error("Admin reject document error:", error);
+
+      if (error.name === "CastError") {
+        return res.status(400).json({
+          message: "Invalid business or document ID",
+        });
+      }
+
+      res.status(500).json({
+        message: "Failed to reject document",
+      });
+    }
+  }
+);
+
+
+/*
   GET /api/admin/listings/pending
 
   Admin gets listings waiting for moderation.

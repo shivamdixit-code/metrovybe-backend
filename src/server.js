@@ -123,6 +123,8 @@ app.use("/api/business", require("./routes/businessRoutes"));
 app.use("/api/admin", require("./routes/adminRoutes"));
 app.use("/api/listings", require("./routes/listingRoutes"));
 app.use("/api/enquiries", require("./routes/enquiryRoutes"));
+app.use("/api/saved", require("./routes/savedRoutes"));
+app.use("/api/bookings", require("./routes/bookingRoutes"));
 
 const PORT = process.env.PORT || 5001;
 
