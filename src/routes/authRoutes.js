@@ -1,4 +1,5 @@
 const express = require("express");
+const auth = require("../middleware/auth");
 const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
 
@@ -1521,6 +1522,127 @@ router.post("/verify-phone-otp", async (req, res) => {
 
     return res.status(500).json({
       message: "Unable to verify phone number.",
+    });
+  }
+});
+
+ 
+router.get("/me", auth, async (req, res) => {
+  try {
+    const user = await User.findById(req.user.id).select(
+      "_id name email phone gender dateOfBirth location role status emailVerified phoneVerified"
+    );
+
+    if (!user) {
+      return res.status(404).json({
+        message: "User account not found.",
+      });
+    }
+
+    return res.json({
+      user: {
+        id: String(user._id),
+        name: user.name,
+        email: user.email,
+        phone: user.phone || "",
+        gender: user.gender,
+        dateOfBirth: user.dateOfBirth,
+        location: user.location,
+        role: user.role,
+        status: user.status,
+        emailVerified: Boolean(user.emailVerified),
+        phoneVerified: Boolean(user.phoneVerified),
+      },
+    });
+  } catch (error) {
+    console.error("GET PROFILE ERROR:", error);
+    return res.status(500).json({
+      message: "Unable to load profile.",
+    });
+  }
+});
+
+router.put("/me", auth, async (req, res) => {
+  try {
+    const user = await User.findById(req.user.id);
+
+    if (!user) {
+      return res.status(404).json({
+        message: "User account not found.",
+      });
+    }
+
+    const name = String(req.body.name ?? "").trim();
+    const phone = String(req.body.phone ?? "").trim();
+
+    if (!name) {
+      return res.status(400).json({
+        message: "Name is required.",
+      });
+    }
+
+    if (name.length > 100) {
+      return res.status(400).json({
+        message: "Name is too long.",
+      });
+    }
+
+    const cleanPhone = phone.replace(/[\s()-]/g, "");
+
+    if (!/^\+[1-9]\d{7,14}$/.test(cleanPhone)) {
+      return res.status(400).json({
+        message: "Please enter a valid international mobile number.",
+      });
+    }
+
+    const phoneChanged = cleanPhone !== String(user.phone || "");
+
+    if (phoneChanged) {
+      const existingPhoneUser = await User.findOne({
+        phone: cleanPhone,
+        _id: { $ne: user._id },
+      }).select("_id");
+
+      if (existingPhoneUser) {
+        return res.status(409).json({
+          message: "This phone number is already linked to another account.",
+        });
+      }
+
+      user.phone = cleanPhone;
+      user.phoneVerified = false;
+      user.phoneOtpHash = "";
+      user.phoneOtpExpiresAt = undefined;
+      user.phoneOtpAttempts = 0;
+      user.phoneOtpLastSentAt = undefined;
+    }
+
+    user.name = name;
+
+    await user.save();
+
+    return res.json({
+      message: phoneChanged
+        ? "Profile updated. Please verify your new phone number."
+        : "Profile updated successfully.",
+      user: {
+        id: String(user._id),
+        name: user.name,
+        email: user.email,
+        phone: user.phone || "",
+        gender: user.gender,
+        dateOfBirth: user.dateOfBirth,
+        location: user.location,
+        role: user.role,
+        status: user.status,
+        emailVerified: Boolean(user.emailVerified),
+        phoneVerified: Boolean(user.phoneVerified),
+      },
+    });
+  } catch (error) {
+    console.error("UPDATE PROFILE ERROR:", error);
+    return res.status(500).json({
+      message: "Unable to update profile.",
     });
   }
 });
