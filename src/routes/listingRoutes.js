@@ -20,6 +20,10 @@ router.get("/", async (req, res) => {
       category,
       location,
       featured,
+      minPrice,
+      maxPrice,
+      minRating,
+      sort,
     } = req.query;
 
     const filter = {
