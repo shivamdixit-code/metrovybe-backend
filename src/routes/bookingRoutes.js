@@ -146,6 +146,13 @@ router.post("/", auth, async (req, res) => {
       )
       .populate("customer", "name email phone");
 
+    console.log("===== BOOKING NOTIFICATION DEBUG =====");
+    console.log("Booking ID:", String(booking._id));
+    console.log("Customer ID:", String(req.user.id));
+    console.log("Listing ID:", String(listing._id));
+    console.log("Business ID:", String(business._id));
+    console.log("Business Owner ID:", String(business.owner));
+
     await createNotification({
       recipient: business.owner,
       preferenceKey: "messages",
@@ -158,6 +165,8 @@ router.post("/", auth, async (req, res) => {
         listingId: String(listing._id),
       },
     });
+
+    console.log("===== BOOKING NOTIFICATION CREATE ATTEMPT FINISHED =====");
 
     res.status(201).json({
       message: "Booking request sent successfully",
