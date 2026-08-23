@@ -125,6 +125,7 @@ app.use("/api/listings", require("./routes/listingRoutes"));
 app.use("/api/enquiries", require("./routes/enquiryRoutes"));
 app.use("/api/saved", require("./routes/savedRoutes"));
 app.use("/api/bookings", require("./routes/bookingRoutes"));
+app.use("/api/notifications", require("./routes/notificationRoutes"));
 
 const PORT = process.env.PORT || 5001;
 

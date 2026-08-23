@@ -168,6 +168,25 @@ const userSchema = new mongoose.Schema(
       type: Date,
       default: undefined,
     },
+    notificationPreferences: {
+      updates: {
+        type: Boolean,
+        default: true,
+      },
+      saved: {
+        type: Boolean,
+        default: true,
+      },
+      messages: {
+        type: Boolean,
+        default: true,
+      },
+      security: {
+        type: Boolean,
+        default: true,
+      },
+    },
+
     activeSessions: [
       {
         sessionId: {

@@ -5,8 +5,55 @@ const auth = require("../middleware/auth");
 const Booking = require("../models/Booking");
 const Listing = require("../models/Listing");
 const Business = require("../models/Business");
+const User = require("../models/User");
+const Notification = require("../models/Notification");
 
 const router = express.Router();
+
+async function createNotification({
+  recipient,
+  preferenceKey = "messages",
+  type = "message",
+  title,
+  body,
+  link = "",
+  metadata = {},
+  essential = false,
+}) {
+  try {
+    const user = await User.findById(recipient).select("notificationPreferences");
+
+    if (!user) return null;
+
+    const preferences = {
+      updates: true,
+      saved: true,
+      messages: true,
+      security: true,
+      ...(user.notificationPreferences?.toObject?.() ||
+        user.notificationPreferences ||
+        {}),
+    };
+
+    if (!essential && preferences[preferenceKey] === false) {
+      return null;
+    }
+
+    return await Notification.create({
+      recipient,
+      type,
+      preferenceKey,
+      title,
+      body,
+      link,
+      metadata,
+      essential,
+    });
+  } catch (error) {
+    console.error("Create booking notification failed:", error.message);
+    return null;
+  }
+}
 
 /*
   POST /api/bookings
@@ -98,6 +145,19 @@ router.post("/", auth, async (req, res) => {
         "businessName category city verificationStatus logo phone email"
       )
       .populate("customer", "name email phone");
+
+    await createNotification({
+      recipient: business.owner,
+      preferenceKey: "messages",
+      type: "booking",
+      title: "New booking request",
+      body: `${req.user.name || "A customer"} sent a booking request for ${listing.title}.`,
+      link: "/business/bookings",
+      metadata: {
+        bookingId: String(booking._id),
+        listingId: String(listing._id),
+      },
+    });
 
     res.status(201).json({
       message: "Booking request sent successfully",
@@ -263,6 +323,30 @@ router.patch("/:id/status", auth, async (req, res) => {
 
     await booking.save();
 
+    await createNotification({
+      recipient: booking.customer,
+      preferenceKey: "messages",
+      type: "booking",
+      title:
+        status === "confirmed"
+          ? "Booking confirmed"
+          : status === "rejected"
+          ? "Booking request declined"
+          : "Booking completed",
+      body:
+        status === "confirmed"
+          ? `Your booking for ${booking.listingTitle} has been confirmed.`
+          : status === "rejected"
+          ? `Your booking request for ${booking.listingTitle} was declined.`
+          : `Your booking for ${booking.listingTitle} has been marked as completed.`,
+      link: "/profile/bookings",
+      metadata: {
+        bookingId: String(booking._id),
+        listingId: String(booking.listing),
+        status,
+      },
+    });
+
     const populatedBooking = await Booking.findById(booking._id)
       .populate(
         "listing",
@@ -324,6 +408,23 @@ router.patch("/:id/cancel", auth, async (req, res) => {
 
     booking.status = "cancelled";
     await booking.save();
+
+    const business = await Business.findById(booking.business);
+
+    if (business?.owner) {
+      await createNotification({
+        recipient: business.owner,
+        preferenceKey: "messages",
+        type: "booking",
+        title: "Booking cancelled",
+        body: `A customer cancelled their booking for ${booking.listingTitle}.`,
+        link: "/business/bookings",
+        metadata: {
+          bookingId: String(booking._id),
+          listingId: String(booking.listing),
+        },
+      });
+    }
 
     res.json({
       message: "Booking cancelled successfully",
