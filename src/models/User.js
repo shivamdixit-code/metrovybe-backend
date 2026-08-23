@@ -120,6 +120,83 @@ const userSchema = new mongoose.Schema(
       type: Date,
       default: undefined,
     },
+
+    pendingPhone: {
+      type: String,
+      default: "",
+      trim: true,
+    },
+
+    pendingPhoneOtpHash: {
+      type: String,
+      default: "",
+    },
+
+    pendingPhoneOtpExpiresAt: {
+      type: Date,
+      default: undefined,
+    },
+
+    pendingPhoneOtpAttempts: {
+      type: Number,
+      default: 0,
+    },
+
+    pendingPhoneOtpLastSentAt: {
+      type: Date,
+      default: undefined,
+    },
+
+    pendingEmail: {
+      type: String,
+      default: "",
+      lowercase: true,
+      trim: true,
+    },
+
+    pendingEmailVerificationTokenHash: {
+      type: String,
+      default: "",
+    },
+
+    pendingEmailVerificationTokenExpiresAt: {
+      type: Date,
+      default: undefined,
+    },
+
+    pendingEmailVerificationLastSentAt: {
+      type: Date,
+      default: undefined,
+    },
+    activeSessions: [
+      {
+        sessionId: {
+          type: String,
+          required: true,
+        },
+        deviceName: {
+          type: String,
+          default: "Unknown device",
+        },
+        userAgent: {
+          type: String,
+          default: "",
+        },
+        ipAddress: {
+          type: String,
+          default: "",
+        },
+        createdAt: {
+          type: Date,
+          default: Date.now,
+        },
+        lastActiveAt: {
+          type: Date,
+          default: Date.now,
+        },
+      },
+    ],
+
   },
   {
     timestamps: true,

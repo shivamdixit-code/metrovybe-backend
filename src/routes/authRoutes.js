@@ -11,17 +11,62 @@ const { Resend } = require("resend");
 
 const router = express.Router();
 
-function createToken(user) {
+function createToken(user, sessionId = null) {
   return jwt.sign(
     {
       id: user._id,
       role: user.role,
+      ...(sessionId ? { sessionId } : {}),
     },
     process.env.JWT_SECRET,
     {
       expiresIn: "7d",
     }
   );
+}
+
+function getDeviceName(userAgent = "") {
+  const ua = String(userAgent).toLowerCase();
+
+  if (ua.includes("iphone")) return "iPhone";
+  if (ua.includes("ipad")) return "iPad";
+  if (ua.includes("android")) return "Android device";
+  if (ua.includes("macintosh") || ua.includes("mac os")) return "Mac";
+  if (ua.includes("windows")) return "Windows PC";
+  if (ua.includes("linux")) return "Linux device";
+
+  return "Unknown device";
+}
+
+async function createActiveSession(user, req) {
+  const sessionId = crypto.randomUUID();
+  const userAgent = String(req.get("user-agent") || "");
+  const forwarded = String(req.headers["x-forwarded-for"] || "");
+  const ipAddress = forwarded.split(",")[0].trim() || req.ip || "";
+
+  user.activeSessions = Array.isArray(user.activeSessions)
+    ? user.activeSessions
+    : [];
+
+  // Keep the most recent 10 sessions per account.
+  if (user.activeSessions.length >= 10) {
+    user.activeSessions = user.activeSessions
+      .sort((a, b) => new Date(b.lastActiveAt) - new Date(a.lastActiveAt))
+      .slice(0, 9);
+  }
+
+  user.activeSessions.push({
+    sessionId,
+    deviceName: getDeviceName(userAgent),
+    userAgent,
+    ipAddress,
+    createdAt: new Date(),
+    lastActiveAt: new Date(),
+  });
+
+  await user.save();
+
+  return sessionId;
 }
 
 function createEmailVerificationToken() {
@@ -754,6 +799,176 @@ router.post("/reset-password", async (req, res) => {
   }
 });
 
+
+/* ===== AUTHENTICATED CHANGE PASSWORD ===== */
+router.post("/change-password", auth, async (req, res) => {
+  try {
+    const currentPassword = String(req.body.currentPassword || "");
+    const newPassword = String(req.body.newPassword || "");
+
+    if (!currentPassword || !newPassword) {
+      return res.status(400).json({
+        message: "Current password and new password are required.",
+      });
+    }
+
+    if (newPassword.length < 6) {
+      return res.status(400).json({
+        message: "New password must be at least 6 characters long.",
+      });
+    }
+
+    const user = await User.findById(req.user.id);
+
+    if (!user) {
+      return res.status(404).json({
+        message: "User account not found.",
+      });
+    }
+
+    const passwordCorrect = await bcrypt.compare(
+      currentPassword,
+      user.password
+    );
+
+    if (!passwordCorrect) {
+      return res.status(400).json({
+        message: "Current password is incorrect.",
+      });
+    }
+
+    const samePassword = await bcrypt.compare(
+      newPassword,
+      user.password
+    );
+
+    if (samePassword) {
+      return res.status(400).json({
+        message: "New password must be different from your current password.",
+      });
+    }
+
+    user.password = await bcrypt.hash(newPassword, 12);
+    await user.save();
+
+    return res.json({
+      message: "Password updated successfully.",
+    });
+  } catch (error) {
+    console.error("Change password error:", error);
+    return res.status(500).json({
+      message: "Unable to update password. Please try again.",
+    });
+  }
+});
+
+
+/* ===== ACTIVE SESSIONS ===== */
+
+router.get("/sessions", auth, async (req, res) => {
+  try {
+    const user = await User.findById(req.user.id).select("activeSessions");
+
+    if (!user) {
+      return res.status(404).json({ message: "User account not found." });
+    }
+
+    const sessions = Array.isArray(user.activeSessions)
+      ? user.activeSessions
+      : [];
+
+    return res.json({
+      sessions: sessions
+        .sort(
+          (a, b) =>
+            new Date(b.lastActiveAt).getTime() -
+            new Date(a.lastActiveAt).getTime()
+        )
+        .map((session) => ({
+          sessionId: session.sessionId,
+          deviceName: session.deviceName,
+          createdAt: session.createdAt,
+          lastActiveAt: session.lastActiveAt,
+          isCurrent: session.sessionId === req.user.sessionId,
+        })),
+    });
+  } catch (error) {
+    console.error("Get active sessions error:", error);
+    return res.status(500).json({
+      message: "Unable to load active sessions.",
+    });
+  }
+});
+
+router.delete("/sessions/:sessionId", auth, async (req, res) => {
+  try {
+    const sessionId = String(req.params.sessionId || "");
+
+    const user = await User.findById(req.user.id);
+
+    if (!user) {
+      return res.status(404).json({ message: "User account not found." });
+    }
+
+    const exists = (user.activeSessions || []).some(
+      (session) => session.sessionId === sessionId
+    );
+
+    if (!exists) {
+      return res.status(404).json({ message: "Session not found." });
+    }
+
+    user.activeSessions = (user.activeSessions || []).filter(
+      (session) => session.sessionId !== sessionId
+    );
+
+    await user.save();
+
+    return res.json({
+      message: "Device signed out successfully.",
+      signedOutCurrent: sessionId === req.user.sessionId,
+    });
+  } catch (error) {
+    console.error("Remove active session error:", error);
+    return res.status(500).json({
+      message: "Unable to sign out this device.",
+    });
+  }
+});
+
+router.delete("/sessions", auth, async (req, res) => {
+  try {
+    const user = await User.findById(req.user.id);
+
+    if (!user) {
+      return res.status(404).json({ message: "User account not found." });
+    }
+
+    const currentSessionId = req.user.sessionId;
+
+    if (!currentSessionId) {
+      return res.status(400).json({
+        message: "This login session cannot be identified. Please sign in again.",
+      });
+    }
+
+    user.activeSessions = (user.activeSessions || []).filter(
+      (session) => session.sessionId === currentSessionId
+    );
+
+    await user.save();
+
+    return res.json({
+      message: "All other devices have been signed out.",
+    });
+  } catch (error) {
+    console.error("Sign out other sessions error:", error);
+    return res.status(500).json({
+      message: "Unable to sign out other devices.",
+    });
+  }
+});
+
 router.post("/login", async (req, res) => {
   try {
     const { email, password, selectedRole } = req.body;
@@ -816,7 +1031,8 @@ router.post("/login", async (req, res) => {
       });
     }
 
-    const token = createToken(user);
+    const sessionId = await createActiveSession(user, req);
+    const token = createToken(user, sessionId);
 
     let business = null;
 
@@ -836,6 +1052,8 @@ router.post("/login", async (req, res) => {
         phone: user.phone,
         role: user.role,
         status: user.status,
+        emailVerified: Boolean(user.emailVerified),
+        phoneVerified: Boolean(user.phoneVerified),
         ...(user.role === "customer"
           ? {
               location: user.location,
@@ -1081,7 +1299,8 @@ router.post("/verify-login-phone-otp", async (req, res) => {
 
     await user.save();
 
-    const token = createToken(user);
+    const sessionId = await createActiveSession(user, req);
+    const token = createToken(user, sessionId);
 
     let business = null;
 
@@ -1698,8 +1917,19 @@ router.post("/verify-phone-change", auth, async (req, res) => {
 
     return res.json({
       message: "Phone number updated and verified successfully.",
-      phone: user.phone,
-      phoneVerified: true,
+      user: {
+        id: String(user._id),
+        name: user.name,
+        email: user.email,
+        phone: user.phone || "",
+        gender: user.gender,
+        dateOfBirth: user.dateOfBirth,
+        location: user.location,
+        role: user.role,
+        status: user.status,
+        emailVerified: Boolean(user.emailVerified),
+        phoneVerified: Boolean(user.phoneVerified),
+      },
     });
   } catch (error) {
     console.error("VERIFY PHONE CHANGE ERROR:", error);
