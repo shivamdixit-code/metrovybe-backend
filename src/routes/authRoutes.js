@@ -1316,7 +1316,7 @@ router.post("/verify-signup-phone-otp", async (req, res) => {
       });
     }
 
-    const cleanPhone = phone.replace(/[\s-]/g, "");
+    const cleanPhone = String(phone).trim().replace(/[\s()-]/g, "");
 
     const existingUser = await User.findOne({
       phone: cleanPhone,
@@ -1527,6 +1527,403 @@ router.post("/verify-phone-otp", async (req, res) => {
 });
 
  
+
+/*
+  POST /api/auth/request-phone-change
+  Sends a WhatsApp OTP to a NEW phone number.
+  The user's existing phone remains unchanged until verification succeeds.
+*/
+router.post("/request-phone-change", auth, async (req, res) => {
+  try {
+    const phone = String(req.body.phone || "").trim();
+    const cleanPhone = phone.replace(/[\s()-]/g, "");
+
+    if (!/^\+[1-9]\d{7,14}$/.test(cleanPhone)) {
+      return res.status(400).json({
+        message: "Please enter a valid international mobile number.",
+      });
+    }
+
+    const user = await User.findById(req.user.id);
+
+    if (!user) {
+      return res.status(404).json({
+        message: "User account not found.",
+      });
+    }
+
+    if (cleanPhone === String(user.phone || "")) {
+      return res.status(400).json({
+        message: "This is already your current phone number.",
+      });
+    }
+
+    const existingPhoneUser = await User.findOne({
+      phone: cleanPhone,
+      _id: { $ne: user._id },
+    }).select("_id");
+
+    if (existingPhoneUser) {
+      return res.status(409).json({
+        message: "This phone number is already linked to another account.",
+      });
+    }
+
+    const now = Date.now();
+
+    if (
+      user.pendingPhoneOtpLastSentAt &&
+      now - user.pendingPhoneOtpLastSentAt.getTime() < 60000
+    ) {
+      return res.status(429).json({
+        message: "Please wait 60 seconds before requesting another OTP.",
+      });
+    }
+
+    const otp = createPhoneOtp();
+
+    user.pendingPhone = cleanPhone;
+    user.pendingPhoneOtpHash = hashPhoneOtp(otp);
+    user.pendingPhoneOtpExpiresAt = new Date(now + 5 * 60 * 1000);
+    user.pendingPhoneOtpAttempts = 0;
+    user.pendingPhoneOtpLastSentAt = new Date(now);
+
+    await user.save();
+
+    try {
+      await sendWhatsAppOtp(cleanPhone, otp);
+    } catch (whatsappError) {
+      user.pendingPhone = "";
+      user.pendingPhoneOtpHash = "";
+      user.pendingPhoneOtpExpiresAt = undefined;
+      user.pendingPhoneOtpAttempts = 0;
+      user.pendingPhoneOtpLastSentAt = undefined;
+      await user.save();
+
+      console.error(
+        "PROFILE PHONE CHANGE WHATSAPP OTP ERROR:",
+        whatsappError.response?.data || whatsappError.message
+      );
+
+      return res.status(502).json({
+        message: "Unable to send OTP through WhatsApp.",
+      });
+    }
+
+    return res.json({
+      message: "OTP sent successfully to your new WhatsApp number.",
+      pendingPhone: cleanPhone,
+    });
+  } catch (error) {
+    console.error("REQUEST PHONE CHANGE ERROR:", error);
+    return res.status(500).json({
+      message: "Unable to request phone number change.",
+    });
+  }
+});
+
+
+/*
+  POST /api/auth/verify-phone-change
+  Only after a correct OTP is entered does the actual phone number change.
+*/
+router.post("/verify-phone-change", auth, async (req, res) => {
+  try {
+    const otp = String(req.body.otp || "").trim();
+
+    if (!otp) {
+      return res.status(400).json({
+        message: "OTP is required.",
+      });
+    }
+
+    const user = await User.findById(req.user.id);
+
+    if (!user) {
+      return res.status(404).json({
+        message: "User account not found.",
+      });
+    }
+
+    if (
+      !user.pendingPhone ||
+      !user.pendingPhoneOtpHash ||
+      !user.pendingPhoneOtpExpiresAt
+    ) {
+      return res.status(400).json({
+        message: "Please request an OTP for your new phone number first.",
+      });
+    }
+
+    if (user.pendingPhoneOtpExpiresAt.getTime() < Date.now()) {
+      return res.status(400).json({
+        message: "OTP has expired. Please request a new OTP.",
+      });
+    }
+
+    if (user.pendingPhoneOtpAttempts >= 5) {
+      user.pendingPhone = "";
+      user.pendingPhoneOtpHash = "";
+      user.pendingPhoneOtpExpiresAt = undefined;
+      user.pendingPhoneOtpAttempts = 0;
+      user.pendingPhoneOtpLastSentAt = undefined;
+      await user.save();
+
+      return res.status(429).json({
+        message: "Too many incorrect attempts. Please request a new OTP.",
+      });
+    }
+
+    if (hashPhoneOtp(otp) !== user.pendingPhoneOtpHash) {
+      user.pendingPhoneOtpAttempts += 1;
+      await user.save();
+
+      return res.status(400).json({
+        message: "Invalid OTP.",
+      });
+    }
+
+    const verifiedPhone = user.pendingPhone;
+
+    user.phone = verifiedPhone;
+    user.phoneVerified = true;
+
+    user.pendingPhone = "";
+    user.pendingPhoneOtpHash = "";
+    user.pendingPhoneOtpExpiresAt = undefined;
+    user.pendingPhoneOtpAttempts = 0;
+    user.pendingPhoneOtpLastSentAt = undefined;
+
+    await user.save();
+
+    return res.json({
+      message: "Phone number updated and verified successfully.",
+      phone: user.phone,
+      phoneVerified: true,
+    });
+  } catch (error) {
+    console.error("VERIFY PHONE CHANGE ERROR:", error);
+    return res.status(500).json({
+      message: "Unable to verify and update phone number.",
+    });
+  }
+});
+
+
+
+/*
+  POST /api/auth/request-email-change
+  Sends a verification link to the NEW email address.
+  The current account email remains active until the new email is verified.
+*/
+router.post("/request-email-change", auth, async (req, res) => {
+  try {
+    const email = String(req.body.email || "").trim().toLowerCase();
+
+    if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+      return res.status(400).json({
+        message: "Please enter a valid email address.",
+      });
+    }
+
+    const user = await User.findById(req.user.id);
+
+    if (!user) {
+      return res.status(404).json({
+        message: "User account not found.",
+      });
+    }
+
+    if (email === String(user.email || "").trim().toLowerCase()) {
+      return res.status(400).json({
+        message: "This is already your current email address.",
+      });
+    }
+
+    const existingUser = await User.findOne({
+      email,
+      _id: { $ne: user._id },
+    }).select("_id");
+
+    if (existingUser) {
+      return res.status(409).json({
+        message: "This email address is already linked to another account.",
+      });
+    }
+
+    const now = Date.now();
+
+    if (
+      user.pendingEmailVerificationLastSentAt &&
+      now - user.pendingEmailVerificationLastSentAt.getTime() < 60000
+    ) {
+      return res.status(429).json({
+        message: "Please wait 60 seconds before requesting another verification email.",
+      });
+    }
+
+    const apiKey = process.env.RESEND_API_KEY;
+    const from = process.env.EMAIL_FROM || "onboarding@resend.dev";
+    const backendUrl =
+      process.env.BACKEND_URL || "https://metrovybe-backend.onrender.com";
+
+    if (!apiKey) {
+      throw new Error("RESEND_API_KEY is not configured");
+    }
+
+    const token = createEmailVerificationToken();
+
+    user.pendingEmail = email;
+    user.pendingEmailVerificationTokenHash =
+      hashEmailVerificationToken(token);
+    user.pendingEmailVerificationTokenExpiresAt =
+      new Date(now + 30 * 60 * 1000);
+    user.pendingEmailVerificationLastSentAt = new Date(now);
+
+    await user.save();
+
+    const verificationUrl =
+      `${backendUrl}/api/auth/verify-email-change?token=${encodeURIComponent(token)}` +
+      `&email=${encodeURIComponent(email)}`;
+
+    const resend = new Resend(apiKey);
+
+    const result = await resend.emails.send({
+      from,
+      to: [email],
+      subject: "Confirm your new MetroVybe email",
+      html: `
+        <div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto;padding:32px;color:#111;">
+          <h1 style="margin-bottom:8px;">Confirm your new email ✉️</h1>
+          <p style="font-size:16px;line-height:1.6;">
+            Hi ${String(user.name || "there").replace(/[<>&"]/g, "")},
+          </p>
+          <p style="font-size:16px;line-height:1.6;">
+            You requested to change the email address for your MetroVybe account.
+            Please confirm your new email address to complete the change.
+          </p>
+          <p style="margin:32px 0;">
+            <a
+              href="${verificationUrl}"
+              style="display:inline-block;background:#29AB87;color:#fff;text-decoration:none;padding:14px 24px;border-radius:8px;font-weight:700;"
+            >
+              Confirm new email
+            </a>
+          </p>
+          <p style="font-size:14px;color:#666;line-height:1.5;">
+            This verification link expires in 30 minutes.
+          </p>
+          <p style="font-size:13px;color:#888;line-height:1.5;">
+            If you did not request this change, you can safely ignore this email.
+          </p>
+        </div>
+      `,
+    });
+
+    if (result?.error) {
+      user.pendingEmail = "";
+      user.pendingEmailVerificationTokenHash = "";
+      user.pendingEmailVerificationTokenExpiresAt = undefined;
+      user.pendingEmailVerificationLastSentAt = undefined;
+      await user.save();
+
+      throw new Error(
+        result.error.message || "Unable to send verification email."
+      );
+    }
+
+    return res.json({
+      message:
+        "Verification link sent to your new email address. Your current email remains unchanged until you confirm it.",
+      pendingEmail: email,
+    });
+  } catch (error) {
+    console.error("REQUEST EMAIL CHANGE ERROR:", error);
+
+    return res.status(500).json({
+      message: "Unable to request email address change.",
+    });
+  }
+});
+
+
+/*
+  GET /api/auth/verify-email-change?token=...&email=...
+  Replaces the account email only after the NEW email verification link is valid.
+*/
+router.get("/verify-email-change", async (req, res) => {
+  const frontendUrl =
+    process.env.FRONTEND_URL || "https://metrovybe.vercel.app";
+
+  const redirect = (status) =>
+    res.redirect(
+      `${frontendUrl}/email-verification?status=${encodeURIComponent(status)}`
+    );
+
+  try {
+    const token = String(req.query.token || "").trim();
+    const email = String(req.query.email || "").trim().toLowerCase();
+
+    if (!token || !email) {
+      return redirect("invalid-email-change");
+    }
+
+    const user = await User.findOne({
+      pendingEmail: email,
+    });
+
+    if (!user) {
+      return redirect("invalid-email-change");
+    }
+
+    if (
+      !user.pendingEmailVerificationTokenHash ||
+      !user.pendingEmailVerificationTokenExpiresAt
+    ) {
+      return redirect("invalid-email-change");
+    }
+
+    if (
+      user.pendingEmailVerificationTokenExpiresAt.getTime() < Date.now()
+    ) {
+      return redirect("email-change-expired");
+    }
+
+    const tokenHash = hashEmailVerificationToken(token);
+
+    if (
+      tokenHash !== user.pendingEmailVerificationTokenHash
+    ) {
+      return redirect("invalid-email-change");
+    }
+
+    const existingUser = await User.findOne({
+      email,
+      _id: { $ne: user._id },
+    }).select("_id");
+
+    if (existingUser) {
+      return redirect("email-already-in-use");
+    }
+
+    user.email = email;
+    user.emailVerified = true;
+
+    user.pendingEmail = "";
+    user.pendingEmailVerificationTokenHash = "";
+    user.pendingEmailVerificationTokenExpiresAt = undefined;
+    user.pendingEmailVerificationLastSentAt = undefined;
+
+    await user.save();
+
+    return redirect("email-changed");
+  } catch (error) {
+    console.error("VERIFY EMAIL CHANGE ERROR:", error);
+    return redirect("error");
+  }
+});
+
+
 router.get("/me", auth, async (req, res) => {
   try {
     const user = await User.findById(req.user.id).select(
@@ -1573,7 +1970,13 @@ router.put("/me", auth, async (req, res) => {
     }
 
     const name = String(req.body.name ?? "").trim();
-    const phone = String(req.body.phone ?? "").trim();
+    const hasPhoneUpdate = Object.prototype.hasOwnProperty.call(
+      req.body,
+      "phone"
+    );
+    const phone = hasPhoneUpdate
+      ? String(req.body.phone ?? "").trim()
+      : "";
 
     if (!name) {
       return res.status(400).json({
@@ -1587,34 +1990,38 @@ router.put("/me", auth, async (req, res) => {
       });
     }
 
-    const cleanPhone = phone.replace(/[\s()-]/g, "");
+    let phoneChanged = false;
 
-    if (!/^\+[1-9]\d{7,14}$/.test(cleanPhone)) {
-      return res.status(400).json({
-        message: "Please enter a valid international mobile number.",
-      });
-    }
+    if (hasPhoneUpdate) {
+      const cleanPhone = phone.replace(/[\s()-]/g, "");
 
-    const phoneChanged = cleanPhone !== String(user.phone || "");
-
-    if (phoneChanged) {
-      const existingPhoneUser = await User.findOne({
-        phone: cleanPhone,
-        _id: { $ne: user._id },
-      }).select("_id");
-
-      if (existingPhoneUser) {
-        return res.status(409).json({
-          message: "This phone number is already linked to another account.",
+      if (!/^\+[1-9]\d{7,14}$/.test(cleanPhone)) {
+        return res.status(400).json({
+          message: "Please enter a valid international mobile number.",
         });
       }
 
-      user.phone = cleanPhone;
-      user.phoneVerified = false;
-      user.phoneOtpHash = "";
-      user.phoneOtpExpiresAt = undefined;
-      user.phoneOtpAttempts = 0;
-      user.phoneOtpLastSentAt = undefined;
+      phoneChanged = cleanPhone !== String(user.phone || "");
+
+      if (phoneChanged) {
+        const existingPhoneUser = await User.findOne({
+          phone: cleanPhone,
+          _id: { $ne: user._id },
+        }).select("_id");
+
+        if (existingPhoneUser) {
+          return res.status(409).json({
+            message: "This phone number is already linked to another account.",
+          });
+        }
+
+        user.phone = cleanPhone;
+        user.phoneVerified = false;
+        user.phoneOtpHash = "";
+        user.phoneOtpExpiresAt = undefined;
+        user.phoneOtpAttempts = 0;
+        user.phoneOtpLastSentAt = undefined;
+      }
     }
 
     user.name = name;
