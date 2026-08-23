@@ -90,7 +90,17 @@ router.get("/", async (req, res) => {
       )
       .lean();
 
-    if (searchTerms.length > 0) {
+    const hasExploreFilters =
+      Boolean(searchTerms.length) ||
+      Boolean(category) ||
+      Boolean(location) ||
+      Boolean(minPrice) ||
+      Boolean(maxPrice) ||
+      Boolean(minRating) ||
+      featured === "true" ||
+      Boolean(sort && sort !== "recommended");
+
+    if (hasExploreFilters) {
       const normalize = (value) =>
         String(value ?? "")
           .toLowerCase()
@@ -136,41 +146,103 @@ router.get("/", async (req, res) => {
         };
       };
 
+      const parsePrice = (value) => {
+        const match = String(value ?? "").replace(/,/g, "").match(/[0-9]+(?:\.[0-9]+)?/);
+        return match ? Number(match[0]) : null;
+      };
+
       listings.forEach((listing) => {
         const text = getSearchText(listing);
         let score = 0;
 
-        for (const term of searchTerms) {
-          if (text.title.includes(term)) score += 100;
-          if (text.businessName.includes(term)) score += 90;
-          if (text.category.includes(term)) score += 80;
-          if (text.tags.includes(term)) score += 70;
-          if (text.location.includes(term)) score += 60;
-          if (text.serviceArea.includes(term)) score += 50;
-          if (text.description.includes(term)) score += 40;
-          if (text.price.includes(term)) score += 25;
-          if (text.serviceDetails.includes(term)) score += 30;
-          if (text.availability.includes(term)) score += 20;
+        if (searchTerms.length > 0) {
+          for (const term of searchTerms) {
+            if (text.title.includes(term)) score += 100;
+            if (text.businessName.includes(term)) score += 90;
+            if (text.category.includes(term)) score += 80;
+            if (text.tags.includes(term)) score += 70;
+            if (text.location.includes(term)) score += 60;
+            if (text.serviceArea.includes(term)) score += 50;
+            if (text.description.includes(term)) score += 40;
+            if (text.price.includes(term)) score += 25;
+            if (text.serviceDetails.includes(term)) score += 30;
+            if (text.availability.includes(term)) score += 20;
+          }
+
+          const fullQuery = normalize(search);
+          const combined = Object.values(text).join(" ");
+
+          if (text.title.includes(fullQuery)) score += 120;
+          if (text.businessName.includes(fullQuery)) score += 110;
+          if (text.location.includes(fullQuery)) score += 90;
+          if (combined.includes(fullQuery)) score += 40;
         }
 
-        const fullQuery = normalize(search);
-        const combined = Object.values(text).join(" ");
+        if (category && text.category === normalize(category)) {
+          score += 80;
+        }
 
-        if (text.title.includes(fullQuery)) score += 120;
-        if (text.businessName.includes(fullQuery)) score += 110;
-        if (text.location.includes(fullQuery)) score += 90;
-        if (combined.includes(fullQuery)) score += 40;
+        if (location) {
+          const locationTerm = normalize(location);
+          if (text.location.includes(locationTerm)) score += 70;
+          if (text.serviceArea.includes(locationTerm)) score += 50;
+        }
 
-        listing.__searchScore = score;
+        const listingPrice = parsePrice(listing.price);
+        const min = minPrice ? Number(minPrice) : null;
+        const max = maxPrice ? Number(maxPrice) : null;
+
+        if (listingPrice !== null) {
+          if (min !== null && listingPrice >= min) score += 15;
+          if (max !== null && listingPrice <= max) score += 15;
+
+          if (
+            min !== null &&
+            max !== null &&
+            listingPrice >= min &&
+            listingPrice <= max
+          ) {
+            score += 30;
+          }
+        }
+
+        const rating = Number(listing.rating || 0);
+
+        if (minRating) {
+          const requiredRating = Number(minRating);
+          if (rating >= requiredRating) score += 45;
+          score += Math.min(rating * 3, 15);
+        } else {
+          score += Math.min(rating * 3, 15);
+        }
+
+        if (listing.featured) {
+          score += 20;
+        }
+
+        if (listing.business?.verificationStatus === "verified") {
+          score += 10;
+        }
+
+        score += Math.min(Number(listing.reviews || 0), 20);
+
+        listing.__relevanceScore = score;
       });
 
-      listings.sort(
-        (a, b) =>
-          (b.__searchScore || 0) - (a.__searchScore || 0)
-      );
+      listings.sort((a, b) => {
+        const scoreDiff =
+          (b.__relevanceScore || 0) - (a.__relevanceScore || 0);
+
+        if (scoreDiff !== 0) return scoreDiff;
+
+        return (
+          new Date(b.createdAt).getTime() -
+          new Date(a.createdAt).getTime()
+        );
+      });
 
       listings.forEach((listing) => {
-        delete listing.__searchScore;
+        delete listing.__relevanceScore;
       });
     }
 
@@ -208,44 +280,76 @@ router.get("/", async (req, res) => {
         const toRad = (value) => (value * Math.PI) / 180;
         const dLat = toRad(lat2 - lat1);
         const dLon = toRad(lon2 - lon1);
+
         const a =
           Math.sin(dLat / 2) ** 2 +
           Math.cos(toRad(lat1)) *
-          Math.cos(toRad(lat2)) *
-          Math.sin(dLon / 2) ** 2;
-        return 6371 * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+            Math.cos(toRad(lat2)) *
+            Math.sin(dLon / 2) ** 2;
+
+        return 6371 * 2 * Math.atan2(
+          Math.sqrt(a),
+          Math.sqrt(1 - a)
+        );
       };
 
+      listings.forEach((listing) => {
+        const lat = Number(listing.latitude);
+        const lng = Number(listing.longitude);
+
+        if (Number.isFinite(lat) && Number.isFinite(lng)) {
+          listing.__distanceKm = distanceKm(
+            customerLocation.latitude,
+            customerLocation.longitude,
+            lat,
+            lng
+          );
+        } else {
+          listing.__distanceKm = Number.POSITIVE_INFINITY;
+        }
+      });
+
       listings.sort((a, b) => {
-        const aLat = Number(a.latitude);
-        const aLng = Number(a.longitude);
-        const bLat = Number(b.latitude);
-        const bLng = Number(b.longitude);
+        if (searchTerms.length > 0) {
+          const relevanceDifference =
+            (b.__searchScore || 0) - (a.__searchScore || 0);
 
-        const aValid = Number.isFinite(aLat) && Number.isFinite(aLng);
-        const bValid = Number.isFinite(bLat) && Number.isFinite(bLng);
+          if (relevanceDifference !== 0) {
+            return relevanceDifference;
+          }
+        }
 
-        if (!aValid && !bValid) return 0;
-        if (!aValid) return 1;
-        if (!bValid) return -1;
+        if (a.__distanceKm !== b.__distanceKm) {
+          return a.__distanceKm - b.__distanceKm;
+        }
 
-        return distanceKm(
-          customerLocation.latitude,
-          customerLocation.longitude,
-          aLat,
-          aLng
-        ) - distanceKm(
-          customerLocation.latitude,
-          customerLocation.longitude,
-          bLat,
-          bLng
+        return (
+          new Date(b.createdAt).getTime() -
+          new Date(a.createdAt).getTime()
         );
       });
+
+      listings.forEach((listing) => {
+        delete listing.__distanceKm;
+      });
     } else {
-      listings.sort(
-        (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
-      );
+      listings.sort((a, b) => {
+        if (searchTerms.length > 0) {
+          const relevanceDifference =
+            (b.__searchScore || 0) - (a.__searchScore || 0);
+
+          if (relevanceDifference !== 0) {
+            return relevanceDifference;
+          }
+        }
+
+        return (
+          new Date(b.createdAt).getTime() -
+          new Date(a.createdAt).getTime()
+        );
+      });
     }
+
     res.json(listings);
   } catch (error) {
     console.error(error);
