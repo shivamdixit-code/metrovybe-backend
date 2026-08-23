@@ -41,12 +41,45 @@ router.get("/", async (req, res) => {
       filter.featured = true;
     }
 
-    if (search) {
+    let searchTerms = [];
+
+    if (search?.trim()) {
+      searchTerms = search
+        .trim()
+        .toLowerCase()
+        .split(/\\s+/)
+        .map((term) => term.replace(/[^a-z0-9₹.-]/gi, ""))
+        .filter((term) => term.length >= 2);
+
+      const searchRegexes = searchTerms.map(
+        (term) => new RegExp(term.replace(/[.*+?^${}()|[\\]\\]/g, "\\\\$&"), "i")
+      );
+
+      const matchingBusinesses = await Business.find({
+        $or: searchRegexes.map((regex) => ({
+          businessName: { $regex: regex },
+        })),
+      })
+        .select("_id")
+        .lean();
+
       filter.$or = [
-        { title: { $regex: search, $options: "i" } },
-        { description: { $regex: search, $options: "i" } },
-        { category: { $regex: search, $options: "i" } },
-        { tags: { $regex: search, $options: "i" } },
+        ...searchRegexes.flatMap((regex) => [
+          { title: { $regex: regex } },
+          { description: { $regex: regex } },
+          { category: { $regex: regex } },
+          { tags: { $regex: regex } },
+          { location: { $regex: regex } },
+          { price: { $regex: regex } },
+          { "serviceArea.areas": { $regex: regex } },
+          { serviceDetails: { $regex: regex } },
+          { availability: { $regex: regex } },
+        ]),
+        {
+          business: {
+            $in: matchingBusinesses.map((business) => business._id),
+          },
+        },
       ];
     }
 
@@ -56,6 +89,90 @@ router.get("/", async (req, res) => {
         "businessName category city verificationStatus logo"
       )
       .lean();
+
+    if (searchTerms.length > 0) {
+      const normalize = (value) =>
+        String(value ?? "")
+          .toLowerCase()
+          .replace(/[^a-z0-9₹.\s-]/g, " ");
+
+      const getSearchText = (listing) => {
+        const serviceDetails =
+          listing.serviceDetails &&
+          typeof listing.serviceDetails === "object"
+            ? JSON.stringify(listing.serviceDetails)
+            : "";
+
+        const availability =
+          listing.availability &&
+          typeof listing.availability === "object"
+            ? JSON.stringify(listing.availability)
+            : "";
+
+        const serviceAreas = Array.isArray(listing.serviceArea?.areas)
+          ? listing.serviceArea.areas.join(" ")
+          : "";
+
+        const tags = Array.isArray(listing.tags)
+          ? listing.tags.join(" ")
+          : "";
+
+        const businessName =
+          listing.business && typeof listing.business === "object"
+            ? listing.business.businessName || ""
+            : "";
+
+        return {
+          title: normalize(listing.title),
+          businessName: normalize(businessName),
+          category: normalize(listing.category),
+          tags: normalize(tags),
+          location: normalize(listing.location),
+          description: normalize(listing.description),
+          price: normalize(listing.price),
+          serviceArea: normalize(serviceAreas),
+          serviceDetails: normalize(serviceDetails),
+          availability: normalize(availability),
+        };
+      };
+
+      listings.forEach((listing) => {
+        const text = getSearchText(listing);
+        let score = 0;
+
+        for (const term of searchTerms) {
+          if (text.title.includes(term)) score += 100;
+          if (text.businessName.includes(term)) score += 90;
+          if (text.category.includes(term)) score += 80;
+          if (text.tags.includes(term)) score += 70;
+          if (text.location.includes(term)) score += 60;
+          if (text.serviceArea.includes(term)) score += 50;
+          if (text.description.includes(term)) score += 40;
+          if (text.price.includes(term)) score += 25;
+          if (text.serviceDetails.includes(term)) score += 30;
+          if (text.availability.includes(term)) score += 20;
+        }
+
+        const fullQuery = normalize(search);
+        const combined = Object.values(text).join(" ");
+
+        if (text.title.includes(fullQuery)) score += 120;
+        if (text.businessName.includes(fullQuery)) score += 110;
+        if (text.location.includes(fullQuery)) score += 90;
+        if (combined.includes(fullQuery)) score += 40;
+
+        listing.__searchScore = score;
+      });
+
+      listings.sort(
+        (a, b) =>
+          (b.__searchScore || 0) - (a.__searchScore || 0)
+      );
+
+      listings.forEach((listing) => {
+        delete listing.__searchScore;
+      });
+    }
 
     const token = (req.headers.authorization || "").startsWith("Bearer ")
       ? req.headers.authorization.split(" ")[1]
