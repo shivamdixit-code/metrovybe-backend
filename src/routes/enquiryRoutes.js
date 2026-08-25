@@ -4,6 +4,7 @@ const Enquiry = require("../models/Enquiry");
 const Listing = require("../models/Listing");
 const Business = require("../models/Business");
 const User = require("../models/User");
+const Notification = require("../models/Notification");
 const auth = require("../middleware/auth");
 
 const router = express.Router();
@@ -78,6 +79,21 @@ router.post("/", auth, async (req, res) => {
       customerEmail: customer.email || "",
       customerPhone: customer.phone || "",
       status: "new",
+    });
+
+    // Notify the business owner about the new enquiry
+    await Notification.create({
+      recipient: business.owner,
+      type: "message",
+      preferenceKey: "messages",
+      title: "New enquiry received",
+      body: `${customer.name || "A customer"} sent an enquiry about ${listing.title}.`,
+      link: "/business/enquiries",
+      read: false,
+      metadata: {
+        enquiryId: String(enquiry._id),
+        listingId: String(listing._id),
+      },
     });
 
     const populatedEnquiry = await Enquiry.findById(enquiry._id)
@@ -211,9 +227,16 @@ router.patch("/:id/read", auth, async (req, res) => {
       });
     }
 
+    // Support enquiries linked through either the business ID or its listings
+    const listings = await Listing.find({ business: business._id }).select("_id");
+    const listingIds = listings.map((item) => item._id);
+
     const enquiry = await Enquiry.findOne({
       _id: req.params.id,
-      business: business._id,
+      $or: [
+        { business: business._id },
+        { listing: { $in: listingIds } },
+      ],
     });
 
     if (!enquiry) {
