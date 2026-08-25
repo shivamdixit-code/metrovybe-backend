@@ -58,6 +58,53 @@ router.get("/listing/:listingId", async (req, res) => {
   }
 });
 
+// Business: get all reviews for the logged-in business
+router.get("/business", auth, async (req, res) => {
+  try {
+    if (req.user.role !== "business") {
+      return res.status(403).json({ message: "Business account required." });
+    }
+
+    const Business = require("../models/Business");
+
+    const business = await Business.findOne({ owner: req.user.id }).select("_id");
+
+    if (!business) {
+      return res.status(404).json({ message: "Business profile not found." });
+    }
+
+    const reviews = await Review.find({ business: business._id })
+      .populate("customer", "name")
+      .populate("listing", "title")
+      .sort({ createdAt: -1 })
+      .lean();
+
+    const totalReviews = reviews.length;
+    const averageRating = totalReviews
+      ? Math.round(
+          (reviews.reduce((sum, review) => sum + Number(review.rating || 0), 0) /
+            totalReviews) *
+            10
+        ) / 10
+      : 0;
+
+    const ratingBreakdown = [5, 4, 3, 2, 1].map((rating) => ({
+      rating,
+      count: reviews.filter((review) => Number(review.rating) === rating).length,
+    }));
+
+    return res.json({
+      reviews,
+      totalReviews,
+      averageRating,
+      ratingBreakdown,
+    });
+  } catch (error) {
+    console.error("Get business reviews error:", error);
+    return res.status(500).json({ message: "Failed to fetch business reviews." });
+  }
+});
+
 // Customer: get own reviews
 router.get("/my", auth, async (req, res) => {
   try {
