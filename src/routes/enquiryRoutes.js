@@ -126,8 +126,18 @@ router.get("/business", auth, async (req, res) => {
       });
     }
 
-    const enquiries = await Enquiry.find({
+    // Fetch enquiries for listings that currently belong to this business.
+    // This also supports older enquiries created before a listing's business
+    // relationship was updated.
+    const listingIds = await Listing.find({
       business: business._id,
+    }).distinct("_id");
+
+    const enquiries = await Enquiry.find({
+      $or: [
+        { business: business._id },
+        { listing: { $in: listingIds } },
+      ],
     })
       .populate("listing", "title category location image")
       .populate("customer", "name email phone")
