@@ -6,6 +6,7 @@ const router = express.Router();
 const Review = require("../models/Review");
 const Booking = require("../models/Booking");
 const Listing = require("../models/Listing");
+const Notification = require("../models/Notification");
 const auth = require("../middleware/auth");
 
 // Recalculate and store a listing's average rating and review count
@@ -105,6 +106,79 @@ router.get("/business", auth, async (req, res) => {
   }
 });
 
+// Business: reply to a customer review
+router.post("/:reviewId/reply", auth, async (req, res) => {
+  try {
+    if (req.user.role !== "business") {
+      return res.status(403).json({ message: "Business account required." });
+    }
+
+    if (!mongoose.Types.ObjectId.isValid(req.params.reviewId)) {
+      return res.status(400).json({ message: "Invalid review ID." });
+    }
+
+    const message = String(req.body?.message || "").trim();
+
+    if (!message) {
+      return res.status(400).json({ message: "Reply message is required." });
+    }
+
+    if (message.length > 2000) {
+      return res.status(400).json({
+        message: "Reply must be 2000 characters or less.",
+      });
+    }
+
+    const Business = require("../models/Business");
+    const business = await Business.findOne({ owner: req.user.id })
+      .select("_id name");
+
+    if (!business) {
+      return res.status(404).json({ message: "Business profile not found." });
+    }
+
+    const review = await Review.findOne({
+      _id: req.params.reviewId,
+      business: business._id,
+    })
+      .populate("customer", "name")
+      .populate("listing", "title");
+
+    if (!review) {
+      return res.status(404).json({ message: "Review not found." });
+    }
+
+    review.businessReply = {
+      message,
+      repliedAt: new Date(),
+    };
+
+    await review.save();
+
+    await Notification.create({
+      recipient: review.customer._id,
+      type: "message",
+      preferenceKey: "messages",
+      title: "The business replied to your review",
+      body: `${business.name || "The business"} responded to your feedback.`,
+      link: "/profile/notification-center",
+      metadata: {
+        reviewId: review._id,
+        listingId: review.listing?._id,
+        kind: "review_reply",
+      },
+    });
+
+    return res.json({
+      message: "Reply sent successfully.",
+      review,
+    });
+  } catch (error) {
+    console.error("Reply to review error:", error);
+    return res.status(500).json({ message: "Failed to send reply." });
+  }
+});
+
 // Customer: get own reviews
 router.get("/my", auth, async (req, res) => {
   try {
@@ -176,6 +250,26 @@ router.post("/", auth, async (req, res) => {
     });
 
     await updateListingRating(booking.listing);
+
+    // Notify the business owner about the new customer review
+    const Business = require("../models/Business");
+    const reviewBusiness = await Business.findById(booking.business).select("owner name");
+
+    if (reviewBusiness?.owner) {
+      await Notification.create({
+        recipient: reviewBusiness.owner,
+        type: "update",
+        preferenceKey: "updates",
+        title: "You received new customer feedback",
+        body: `A customer left a ${numericRating}-star review for ${reviewBusiness.name || "your business"}.`,
+        link: "/business/feedback",
+        metadata: {
+          reviewId: review._id,
+          listingId: booking.listing,
+          kind: "new_review",
+        },
+      });
+    }
 
     return res.status(201).json({
       message: "Review submitted successfully.",

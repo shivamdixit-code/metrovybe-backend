@@ -38,6 +38,19 @@ const reviewSchema = new mongoose.Schema(
       trim: true,
       maxlength: 2000,
     },
+
+    businessReply: {
+      message: {
+        type: String,
+        default: "",
+        trim: true,
+        maxlength: 2000,
+      },
+      repliedAt: {
+        type: Date,
+        default: null,
+      },
+    },
   },
   {
     timestamps: true,
