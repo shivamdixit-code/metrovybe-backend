@@ -179,6 +179,112 @@ router.post("/:reviewId/reply", auth, async (req, res) => {
   }
 });
 
+
+// Business: edit an existing reply
+router.patch("/:reviewId/reply", auth, async (req, res) => {
+  try {
+    if (req.user.role !== "business") {
+      return res.status(403).json({ message: "Business account required." });
+    }
+
+    if (!mongoose.Types.ObjectId.isValid(req.params.reviewId)) {
+      return res.status(400).json({ message: "Invalid review ID." });
+    }
+
+    const message = String(req.body?.message || "").trim();
+
+    if (!message) {
+      return res.status(400).json({ message: "Reply message is required." });
+    }
+
+    if (message.length > 2000) {
+      return res.status(400).json({
+        message: "Reply must be 2000 characters or less.",
+      });
+    }
+
+    const Business = require("../models/Business");
+    const business = await Business.findOne({ owner: req.user.id }).select("_id");
+
+    if (!business) {
+      return res.status(404).json({ message: "Business profile not found." });
+    }
+
+    const review = await Review.findOne({
+      _id: req.params.reviewId,
+      business: business._id,
+    });
+
+    if (!review) {
+      return res.status(404).json({ message: "Review not found." });
+    }
+
+    if (!review.businessReply?.message) {
+      return res.status(404).json({ message: "No reply found to edit." });
+    }
+
+    review.businessReply.message = message;
+    await review.save();
+
+    return res.json({
+      message: "Reply updated successfully.",
+      review,
+    });
+  } catch (error) {
+    console.error("Edit review reply error:", error);
+    return res.status(500).json({ message: "Failed to update reply." });
+  }
+});
+
+// Business: delete an existing reply
+router.delete("/:reviewId/reply", auth, async (req, res) => {
+  try {
+    if (req.user.role !== "business") {
+      return res.status(403).json({ message: "Business account required." });
+    }
+
+    if (!mongoose.Types.ObjectId.isValid(req.params.reviewId)) {
+      return res.status(400).json({ message: "Invalid review ID." });
+    }
+
+    const Business = require("../models/Business");
+    const business = await Business.findOne({ owner: req.user.id }).select("_id");
+
+    if (!business) {
+      return res.status(404).json({ message: "Business profile not found." });
+    }
+
+    const review = await Review.findOne({
+      _id: req.params.reviewId,
+      business: business._id,
+    });
+
+    if (!review) {
+      return res.status(404).json({ message: "Review not found." });
+    }
+
+    if (!review.businessReply?.message) {
+      return res.status(404).json({ message: "No reply found to delete." });
+    }
+
+    review.businessReply = {
+      message: "",
+      repliedAt: null,
+    };
+
+    await review.save();
+
+    return res.json({
+      message: "Reply deleted successfully.",
+      review,
+    });
+  } catch (error) {
+    console.error("Delete review reply error:", error);
+    return res.status(500).json({ message: "Failed to delete reply." });
+  }
+});
+
+
 // Customer: get own reviews
 router.get("/my", auth, async (req, res) => {
   try {
