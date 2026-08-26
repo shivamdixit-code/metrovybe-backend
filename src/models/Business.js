@@ -75,7 +75,24 @@ const businessSchema = new mongoose.Schema(
       },
     },
 
-    logo: {
+    businessHours: {
+    open: {
+      type: String,
+      default: "",
+      trim: true,
+    },
+    close: {
+      type: String,
+      default: "",
+      trim: true,
+    },
+    open24Hours: {
+      type: Boolean,
+      default: false,
+    },
+  },
+
+  logo: {
       type: String,
       default: "",
     },

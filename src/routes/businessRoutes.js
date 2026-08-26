@@ -167,6 +167,84 @@ router.get("/me", auth, async (req, res) => {
   }
 });
 
+
+/*
+  PATCH /api/business/me
+  Update current business profile.
+*/
+router.patch("/me", auth, async (req, res) => {
+  try {
+    if (req.user.role !== "business") {
+      return res.status(403).json({
+        message: "Business account required",
+      });
+    }
+
+    const business = await Business.findOne({
+      owner: req.user.id,
+    });
+
+    if (!business) {
+      return res.status(404).json({
+        message: "Business profile not found",
+      });
+    }
+
+    const allowedFields = [
+      "businessName",
+      "description",
+      "businessHours",
+      "category",
+      "address",
+      "city",
+      "state",
+      "pincode",
+      "logo",
+    ];
+
+    for (const field of allowedFields) {
+      if (Object.prototype.hasOwnProperty.call(req.body, field)) {
+        business[field] =
+          typeof req.body[field] === "string"
+            ? req.body[field].trim()
+            : req.body[field];
+      }
+    }
+
+    if (req.body.location && typeof req.body.location === "object") {
+      const latitude = Number(req.body.location.latitude);
+      const longitude = Number(req.body.location.longitude);
+
+      if (Number.isFinite(latitude) && Number.isFinite(longitude)) {
+        business.location = { latitude, longitude };
+      }
+    }
+
+    if (!business.businessName || !business.category ||
+        !business.address || !business.city) {
+      return res.status(400).json({
+        message: "Business name, category, address and city are required.",
+      });
+    }
+
+    await business.save();
+
+    const updatedBusiness = await Business.findById(business._id)
+      .populate("owner", "name email phone role status");
+
+    return res.json({
+      message: "Business details updated successfully.",
+      business: updatedBusiness,
+    });
+  } catch (error) {
+    console.error("Update business profile error:", error);
+    return res.status(500).json({
+      message: "Failed to update business details.",
+    });
+  }
+});
+
+
 router.get("/verification", auth, async (req, res) => {
   try {
     if (req.user.role !== "business") {
