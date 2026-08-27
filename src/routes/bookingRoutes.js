@@ -243,8 +243,25 @@ router.get("/business", auth, async (req, res) => {
       });
     }
 
+    console.log("===== BUSINESS BOOKINGS DEBUG =====");
+    console.log("JWT User ID:", String(req.user.id));
+    console.log("Business ID:", String(business._id));
+    console.log("Business Owner ID:", String(business.owner));
+
+    // Fetch bookings linked directly to this business, including
+    // legacy bookings that were saved against one of its listings.
+    const businessListings = await Listing.find(
+      { business: business._id },
+      { _id: 1 }
+    ).lean();
+
+    const listingIds = businessListings.map((listing) => listing._id);
+
     const bookings = await Booking.find({
-      business: business._id,
+      $or: [
+        { business: business._id },
+        ...(listingIds.length ? [{ listing: { $in: listingIds } }] : []),
+      ],
     })
       .populate(
         "listing",
@@ -252,6 +269,8 @@ router.get("/business", auth, async (req, res) => {
       )
       .populate("customer", "name email phone")
       .sort({ createdAt: -1 });
+
+    console.log("Bookings found for this business:", bookings.length);
 
     res.json({
       bookings,

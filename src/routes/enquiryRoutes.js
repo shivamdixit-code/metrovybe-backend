@@ -269,4 +269,255 @@ router.patch("/:id/read", auth, async (req, res) => {
   }
 });
 
+
+/*
+  POST /api/enquiries/:id/reply
+  Business replies to its own enquiry.
+*/
+router.post("/:id/reply", auth, async (req, res) => {
+  try {
+    if (req.user.role !== "business") {
+      return res.status(403).json({
+        message: "Business account required",
+      });
+    }
+
+    const message = String(req.body?.message || "").trim();
+
+    if (!message) {
+      return res.status(400).json({
+        message: "Reply message is required",
+      });
+    }
+
+    if (message.length > 2000) {
+      return res.status(400).json({
+        message: "Reply must be 2000 characters or less",
+      });
+    }
+
+    const business = await Business.findOne({
+      owner: req.user.id,
+    });
+
+    if (!business) {
+      return res.status(404).json({
+        message: "Business profile not found",
+      });
+    }
+
+    const listingIds = await Listing.find({
+      business: business._id,
+    }).distinct("_id");
+
+    const enquiry = await Enquiry.findOne({
+      _id: req.params.id,
+      $or: [
+        { business: business._id },
+        { listing: { $in: listingIds } },
+      ],
+    });
+
+    if (!enquiry) {
+      return res.status(404).json({
+        message: "Enquiry not found",
+      });
+    }
+
+    enquiry.businessReply = {
+      message,
+      repliedAt: new Date(),
+    };
+    enquiry.status = "replied";
+
+    await enquiry.save();
+
+    await Notification.create({
+      recipient: enquiry.customer,
+      type: "message",
+      preferenceKey: "messages",
+      title: "New reply to your enquiry",
+      body: "The business replied to your enquiry.",
+      link: "/profile/notification-center",
+      read: false,
+      metadata: {
+        enquiryId: String(enquiry._id),
+        listingId: String(enquiry.listing),
+        kind: "enquiry_reply",
+      },
+    });
+
+    const populatedEnquiry = await Enquiry.findById(enquiry._id)
+      .populate("listing", "title category location image")
+      .populate("business", "businessName category city")
+      .populate("customer", "name email phone");
+
+    return res.json({
+      message: "Reply sent successfully",
+      enquiry: populatedEnquiry,
+    });
+  } catch (error) {
+    console.error("Reply to enquiry failed:", error);
+
+    if (error.name === "CastError") {
+      return res.status(400).json({
+        message: "Invalid enquiry ID",
+      });
+    }
+
+    return res.status(500).json({
+      message: "Failed to send reply",
+    });
+  }
+});
+
+
+/*
+  PATCH /api/enquiries/:id/reply
+  Business edits its own reply.
+*/
+router.patch("/:id/reply", auth, async (req, res) => {
+  try {
+    if (req.user.role !== "business") {
+      return res.status(403).json({
+        message: "Business account required",
+      });
+    }
+
+    const message = String(req.body?.message || "").trim();
+
+    if (!message) {
+      return res.status(400).json({
+        message: "Reply message is required",
+      });
+    }
+
+    if (message.length > 2000) {
+      return res.status(400).json({
+        message: "Reply must be 2000 characters or less",
+      });
+    }
+
+    const business = await Business.findOne({
+      owner: req.user.id,
+    });
+
+    if (!business) {
+      return res.status(404).json({
+        message: "Business profile not found",
+      });
+    }
+
+    const enquiry = await Enquiry.findOne({
+      _id: req.params.id,
+      business: business._id,
+    });
+
+    if (!enquiry) {
+      return res.status(404).json({
+        message: "Enquiry not found",
+      });
+    }
+
+    if (!enquiry.businessReply?.message) {
+      return res.status(400).json({
+        message: "No reply exists to edit",
+      });
+    }
+
+    enquiry.businessReply.message = message;
+    enquiry.businessReply.repliedAt = new Date();
+    enquiry.status = "replied";
+
+    await enquiry.save();
+
+    const populatedEnquiry = await Enquiry.findById(enquiry._id)
+      .populate("listing", "title category location image")
+      .populate("business", "businessName category city")
+      .populate("customer", "name email phone");
+
+    return res.json({
+      message: "Reply updated successfully",
+      enquiry: populatedEnquiry,
+    });
+  } catch (error) {
+    console.error("Edit enquiry reply failed:", error);
+
+    if (error.name === "CastError") {
+      return res.status(400).json({
+        message: "Invalid enquiry ID",
+      });
+    }
+
+    return res.status(500).json({
+      message: "Failed to update reply",
+    });
+  }
+});
+
+/*
+  DELETE /api/enquiries/:id/reply
+  Business deletes its own reply.
+*/
+router.delete("/:id/reply", auth, async (req, res) => {
+  try {
+    if (req.user.role !== "business") {
+      return res.status(403).json({
+        message: "Business account required",
+      });
+    }
+
+    const business = await Business.findOne({
+      owner: req.user.id,
+    });
+
+    if (!business) {
+      return res.status(404).json({
+        message: "Business profile not found",
+      });
+    }
+
+    const enquiry = await Enquiry.findOne({
+      _id: req.params.id,
+      business: business._id,
+    });
+
+    if (!enquiry) {
+      return res.status(404).json({
+        message: "Enquiry not found",
+      });
+    }
+
+    enquiry.businessReply = {
+      message: "",
+      repliedAt: null,
+    };
+    enquiry.status = "read";
+
+    await enquiry.save();
+
+    const populatedEnquiry = await Enquiry.findById(enquiry._id)
+      .populate("listing", "title category location image")
+      .populate("business", "businessName category city")
+      .populate("customer", "name email phone");
+
+    return res.json({
+      message: "Reply deleted successfully",
+      enquiry: populatedEnquiry,
+    });
+  } catch (error) {
+    console.error("Delete enquiry reply failed:", error);
+
+    if (error.name === "CastError") {
+      return res.status(400).json({
+        message: "Invalid enquiry ID",
+      });
+    }
+
+    return res.status(500).json({
+      message: "Failed to delete reply",
+    });
+  }
+});
+
 module.exports = router;

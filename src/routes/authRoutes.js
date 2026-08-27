@@ -2154,6 +2154,70 @@ router.get("/verify-email-change", async (req, res) => {
 });
 
 
+
+/* ===== DELETE AUTHENTICATED ACCOUNT ===== */
+router.delete("/account", auth, async (req, res) => {
+  try {
+    const password = String(req.body.password || "");
+
+    if (!password) {
+      return res.status(400).json({
+        message: "Password is required to delete your account.",
+      });
+    }
+
+    const user = await User.findById(req.user.id);
+
+    if (!user) {
+      return res.status(404).json({
+        message: "Account not found.",
+      });
+    }
+
+    const passwordCorrect = await bcrypt.compare(
+      password,
+      user.password
+    );
+
+    if (!passwordCorrect) {
+      return res.status(401).json({
+        message: "Incorrect password.",
+      });
+    }
+
+    const userId = user._id;
+
+    // Remove account-owned data before deleting the user.
+    await Promise.all([
+      Business.deleteMany({ owner: userId }),
+      Listing.deleteMany({ owner: userId }),
+      Booking.deleteMany({
+        $or: [{ customer: userId }, { businessOwner: userId }],
+      }),
+      SavedListing.deleteMany({ user: userId }),
+      Enquiry.deleteMany({
+        $or: [{ customer: userId }, { business: userId }],
+      }),
+      Review.deleteMany({
+        $or: [{ customer: userId }, { business: userId }],
+      }),
+      Notification.deleteMany({ user: userId }),
+    ]);
+
+    await User.findByIdAndDelete(userId);
+
+    return res.json({
+      message: "Your account has been permanently deleted.",
+    });
+  } catch (error) {
+    console.error("DELETE ACCOUNT ERROR:", error);
+
+    return res.status(500).json({
+      message: "Unable to delete your account. Please try again.",
+    });
+  }
+});
+
 router.get("/me", auth, async (req, res) => {
   try {
     const user = await User.findById(req.user.id).select(

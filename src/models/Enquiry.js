@@ -45,6 +45,19 @@ const enquirySchema = new mongoose.Schema(
       trim: true,
     },
 
+    businessReply: {
+      message: {
+        type: String,
+        trim: true,
+        maxlength: 2000,
+        default: "",
+      },
+      repliedAt: {
+        type: Date,
+        default: null,
+      },
+    },
+
     status: {
       type: String,
       enum: ["new", "read", "replied", "closed"],

@@ -589,4 +589,51 @@ router.put("/:id", auth, async (req, res) => {
   }
 });
 
+
+/*
+  DELETE /api/listings/:id
+
+  Business can delete only its own listing.
+*/
+router.delete("/:id", auth, async (req, res) => {
+  try {
+    if (req.user.role !== "business") {
+      return res.status(403).json({
+        message: "Business account required",
+      });
+    }
+
+    const business = await Business.findOne({
+      owner: req.user.id,
+    });
+
+    if (!business) {
+      return res.status(404).json({
+        message: "Business profile not found",
+      });
+    }
+
+    const listing = await Listing.findOneAndDelete({
+      _id: req.params.id,
+      business: business._id,
+    });
+
+    if (!listing) {
+      return res.status(404).json({
+        message: "Listing not found or does not belong to your business",
+      });
+    }
+
+    res.json({
+      message: "Listing deleted successfully",
+      listingId: req.params.id,
+    });
+  } catch (error) {
+    console.error(error);
+    res.status(400).json({
+      message: "Failed to delete listing",
+    });
+  }
+});
+
 module.exports = router;
