@@ -4,6 +4,8 @@ const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
 
 const User = require("../models/User");
+const cloudinary = require("../config/cloudinary");
+const upload = require("../middleware/upload");
 const Business = require("../models/Business");
 const SignupPhoneOtp = require("../models/SignupPhoneOtp");
 const axios = require("axios");
@@ -1922,6 +1924,7 @@ router.post("/verify-phone-change", auth, async (req, res) => {
         name: user.name,
         email: user.email,
         phone: user.phone || "",
+        image: user.image || "",
         gender: user.gender,
         dateOfBirth: user.dateOfBirth,
         location: user.location,
@@ -2221,7 +2224,7 @@ router.delete("/account", auth, async (req, res) => {
 router.get("/me", auth, async (req, res) => {
   try {
     const user = await User.findById(req.user.id).select(
-      "_id name email phone gender dateOfBirth location role status emailVerified phoneVerified"
+      "_id name email phone image gender dateOfBirth location role status emailVerified phoneVerified"
     );
 
     if (!user) {
@@ -2236,6 +2239,7 @@ router.get("/me", auth, async (req, res) => {
         name: user.name,
         email: user.email,
         phone: user.phone || "",
+        image: user.image || "",
         gender: user.gender,
         dateOfBirth: user.dateOfBirth,
         location: user.location,
@@ -2331,6 +2335,7 @@ router.put("/me", auth, async (req, res) => {
         name: user.name,
         email: user.email,
         phone: user.phone || "",
+        image: user.image || "",
         gender: user.gender,
         dateOfBirth: user.dateOfBirth,
         location: user.location,
@@ -2344,6 +2349,80 @@ router.put("/me", auth, async (req, res) => {
     console.error("UPDATE PROFILE ERROR:", error);
     return res.status(500).json({
       message: "Unable to update profile.",
+    });
+  }
+});
+
+
+router.post("/me/image", auth, upload.single("image"), async (req, res) => {
+  try {
+    if (!req.file) {
+      return res.status(400).json({
+        message: "No profile image provided.",
+      });
+    }
+
+    const result = await new Promise((resolve, reject) => {
+      const stream = cloudinary.uploader.upload_stream(
+        {
+          folder: "metrovybe/profile",
+          resource_type: "image",
+        },
+        (error, result) => {
+          if (error) return reject(error);
+          resolve(result);
+        }
+      );
+
+      stream.end(req.file.buffer);
+    });
+
+    const user = await User.findById(req.user.id);
+
+    if (!user) {
+      return res.status(404).json({
+        message: "User account not found.",
+      });
+    }
+
+    user.image = result.secure_url;
+    await user.save();
+
+    return res.json({
+      message: "Profile photo updated successfully.",
+      image: user.image,
+    });
+  } catch (error) {
+    console.error("PROFILE IMAGE UPLOAD ERROR:", error);
+    return res.status(500).json({
+      message: "Unable to update profile photo.",
+    });
+  }
+});
+
+
+
+router.delete("/me/image", auth, async (req, res) => {
+  try {
+    const user = await User.findById(req.user.id);
+
+    if (!user) {
+      return res.status(404).json({
+        message: "User account not found.",
+      });
+    }
+
+    user.image = "";
+    await user.save();
+
+    return res.json({
+      message: "Profile photo removed successfully.",
+      image: "",
+    });
+  } catch (error) {
+    console.error("PROFILE IMAGE REMOVE ERROR:", error);
+    return res.status(500).json({
+      message: "Unable to remove profile photo.",
     });
   }
 });
