@@ -161,7 +161,7 @@ router.post("/:reviewId/reply", auth, async (req, res) => {
       preferenceKey: "messages",
       title: "The business replied to your review",
       body: `${business.name || "The business"} responded to your feedback.`,
-      link: "/profile/notification-center",
+      link: `/profile?activity=review-reply-${review._id}`,
       metadata: {
         reviewId: review._id,
         listingId: review.listing?._id,

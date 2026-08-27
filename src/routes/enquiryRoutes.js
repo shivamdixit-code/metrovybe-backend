@@ -338,7 +338,7 @@ router.post("/:id/reply", auth, async (req, res) => {
       preferenceKey: "messages",
       title: "New reply to your enquiry",
       body: "The business replied to your enquiry.",
-      link: "/profile/notification-center",
+      link: `/profile?activity=enquiry-reply-${enquiry._id}`,
       read: false,
       metadata: {
         enquiryId: String(enquiry._id),
