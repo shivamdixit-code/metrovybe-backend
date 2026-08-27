@@ -233,6 +233,38 @@ router.get("/", async (req, res) => {
         listing.__relevanceScore = score;
       });
 
+      // Apply actual Explore filters (price and rating)
+      const min = minPrice ? Number(minPrice) : null;
+      const max = maxPrice ? Number(maxPrice) : null;
+      const requiredRating = minRating ? Number(minRating) : null;
+
+      const filteredListings = listings.filter((listing) => {
+        const listingPrice = parsePrice(listing.price);
+        const rating = Number(listing.rating || 0);
+
+        if (min !== null && (listingPrice === null || listingPrice < min)) {
+          return false;
+        }
+
+        if (max !== null && (listingPrice === null || listingPrice > max)) {
+          return false;
+        }
+
+        if (requiredRating !== null && rating < requiredRating) {
+          return false;
+        }
+
+        // Featured-only filter
+        if (featured === "true" && listing.featured !== true) {
+          return false;
+        }
+
+        return true;
+      });
+
+      listings.length = 0;
+      listings.push(...filteredListings);
+
       listings.sort((a, b) => {
         const scoreDiff =
           (b.__relevanceScore || 0) - (a.__relevanceScore || 0);
@@ -345,6 +377,48 @@ router.get("/", async (req, res) => {
           if (relevanceDifference !== 0) {
             return relevanceDifference;
           }
+        }
+
+        return (
+          new Date(b.createdAt).getTime() -
+          new Date(a.createdAt).getTime()
+        );
+      });
+    }
+
+    // Apply the user's explicit Sort by choice last so that
+    // distance/relevance ordering cannot override it.
+    if (sort === "price-asc" || sort === "price-desc") {
+      const getNumericPrice = (value) => {
+        const match = String(value ?? "")
+          .replace(/,/g, "")
+          .match(/[0-9]+(?:\.[0-9]+)?/);
+
+        return match ? Number(match[0]) : Number.POSITIVE_INFINITY;
+      };
+
+      listings.sort((a, b) => {
+        const priceA = getNumericPrice(a.price);
+        const priceB = getNumericPrice(b.price);
+
+        if (priceA !== priceB) {
+          return sort === "price-asc"
+            ? priceA - priceB
+            : priceB - priceA;
+        }
+
+        return (
+          new Date(b.createdAt).getTime() -
+          new Date(a.createdAt).getTime()
+        );
+      });
+    } else if (sort === "rating-desc") {
+      listings.sort((a, b) => {
+        const ratingA = Number(a.rating || 0);
+        const ratingB = Number(b.rating || 0);
+
+        if (ratingA !== ratingB) {
+          return ratingB - ratingA;
         }
 
         return (
