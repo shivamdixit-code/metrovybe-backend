@@ -387,6 +387,7 @@ router.patch("/:id/status", auth, async (req, res) => {
         listingId: String(booking.listing),
         status,
       },
+      essential: true,
     });
 
     const populatedBooking = await Booking.findById(booking._id)
