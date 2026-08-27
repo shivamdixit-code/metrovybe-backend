@@ -332,9 +332,23 @@ router.patch("/:id/status", auth, async (req, res) => {
       });
     }
 
+    // Support both current bookings linked directly to the business
+    // and legacy bookings linked through one of the business listings.
+    const businessListings = await Listing.find(
+      { business: business._id },
+      { _id: 1 }
+    ).lean();
+
+    const listingIds = businessListings.map((listing) => listing._id);
+
     const booking = await Booking.findOne({
       _id: req.params.id,
-      business: business._id,
+      $or: [
+        { business: business._id },
+        ...(listingIds.length
+          ? [{ listing: { $in: listingIds } }]
+          : []),
+      ],
     });
 
     if (!booking) {
