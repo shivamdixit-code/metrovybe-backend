@@ -159,7 +159,7 @@ router.post("/", auth, async (req, res) => {
       type: "booking",
       title: "New booking request",
       body: `${req.user.name || "A customer"} sent a booking request for ${listing.title}.`,
-      link: "/business/bookings",
+      link: `/business/dashboard?bookingId=${String(booking._id)}`,
       metadata: {
         bookingId: String(booking._id),
         listingId: String(listing._id),
@@ -367,7 +367,7 @@ router.patch("/:id/status", auth, async (req, res) => {
           : status === "rejected"
           ? `Your booking request for ${booking.listingTitle} was declined.`
           : `Your booking for ${booking.listingTitle} has been marked as completed.`,
-      link: "/profile/bookings",
+      link: "/bookings",
       metadata: {
         bookingId: String(booking._id),
         listingId: String(booking.listing),
@@ -446,7 +446,7 @@ router.patch("/:id/cancel", auth, async (req, res) => {
         type: "booking",
         title: "Booking cancelled",
         body: `A customer cancelled their booking for ${booking.listingTitle}.`,
-        link: "/business/bookings",
+        link: "/business/dashboard",
         metadata: {
           bookingId: String(booking._id),
           listingId: String(booking.listing),
