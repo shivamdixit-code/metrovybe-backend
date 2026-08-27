@@ -21,6 +21,11 @@ const userSchema = new mongoose.Schema(
       default: "",
       trim: true,
     },
+    image: {
+      type: String,
+      default: "",
+      trim: true,
+    },
 
     gender: {
       type: String,
